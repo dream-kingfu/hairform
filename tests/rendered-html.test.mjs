@@ -32,3 +32,25 @@ test("keeps model output separate from deterministic labels", async () => {
   assert.match(hosting, /"r2": "HAIR_ASSETS"/);
   assert.doesNotMatch(page, /codex-preview|_sites-preview/);
 });
+
+test("enforces public generation budgets without storing raw IP addresses", async () => {
+  const [rateLimit, createRoute, retryRoute, processRoute, schema, migration] = await Promise.all([
+    readFile(new URL("../lib/server/rate-limit.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/v1/hair-jobs/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/v1/hair-jobs/[jobId]/retry/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/v1/hair-jobs/[jobId]/process/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../db/schema.ts", import.meta.url), "utf8"),
+    readFile(new URL("../drizzle/0002_spicy_aqueduct.sql", import.meta.url), "utf8"),
+  ]);
+  assert.match(rateLimit, /MAX_JOBS_PER_HOUR, 2/);
+  assert.match(rateLimit, /MAX_JOBS_PER_DAY, 5/);
+  assert.match(rateLimit, /MAX_RETRIES_PER_HOUR, 6/);
+  assert.match(rateLimit, /MAX_GENERATION_UNITS_PER_DAY, 600/);
+  assert.match(rateLimit, /crypto\.subtle\.digest\("SHA-256"/);
+  assert.match(rateLimit, /Retry-After/);
+  assert.match(createRoute, /consumeNewJobLimit/);
+  assert.match(retryRoute, /consumeRetryLimit/);
+  assert.match(processRoute, /claimInitialJob/);
+  assert.match(schema, /rate_limit_buckets/);
+  assert.match(migration, /work_lock_until/);
+});

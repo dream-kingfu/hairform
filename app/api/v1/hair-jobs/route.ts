@@ -1,4 +1,5 @@
 import { cleanupExpiredJobs, createJobIdentity, hashToken, insertJob, isDemoMode, jobCookie, putAsset } from "@/lib/server/jobs";
+import { consumeNewJobLimit, rateLimitResponse } from "@/lib/server/rate-limit";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +18,9 @@ export async function POST(request: Request) {
     if (mask instanceof File && (mask.type !== "image/png" || mask.size > MAX_FILE_SIZE)) {
       return Response.json({ error: "invalid_mask" }, { status: 400 });
     }
+
+    const rateLimit = await consumeNewJobLimit(request);
+    if (!rateLimit.allowed) return rateLimitResponse(rateLimit);
 
     const { jobId, token } = createJobIdentity();
     const originalKey = `jobs/${jobId}/original`;

@@ -15,6 +15,13 @@
       "when": 1784739502321,
       "tag": "0001_sour_hammerhead",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1784743655577,
+      "tag": "0002_spicy_aqueduct",
+      "breakpoints": true
     }
   ]
 }

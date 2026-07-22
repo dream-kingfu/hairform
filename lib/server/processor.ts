@@ -55,7 +55,7 @@ export async function processJob(job: StoredJob, onlyIds?: AssetId[]) {
     analysis = await analyzePortrait(image, contentType);
     const qualityBlockers = new Set(["side_angle", "hat", "hairline_occluded", "multiple_faces", "no_face", "too_dark", "face_too_small"]);
     if (analysis.warnings.some((warning) => qualityBlockers.has(warning))) {
-      await updateJob(job.id, { status: "failed", progress: 100, analysis, errorCode: "photo_quality_failed" });
+      await updateJob(job.id, { status: "failed", progress: 100, analysis, errorCode: "photo_quality_failed", workLockUntil: null });
       return getJob(job.id);
     }
     await updateJob(job.id, { status: "generating", progress: 22, analysis });
@@ -85,6 +85,7 @@ export async function processJob(job: StoredJob, onlyIds?: AssetId[]) {
     progress: canCompose ? 92 : 100,
     assets,
     errorCode: canCompose ? null : "insufficient_previews",
+    workLockUntil: null,
   });
   return getJob(job.id);
 }

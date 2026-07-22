@@ -26,6 +26,7 @@ const ERROR_MESSAGES: Record<string, string> = {
   moderation_blocked: "这张照片无法处理，请更换本人清晰正面照。",
   insufficient_previews: "可用预览数量不足，请重新生成。",
   photo_quality_failed: "照片角度或遮挡不符合要求，请更换清晰正面照。",
+  job_busy: "当前任务仍在处理中，请稍后再试。",
 };
 
 function Bi({ value }: { value: BilingualLabel }) {
@@ -205,7 +206,10 @@ export function HairApp() {
     try {
       const current = await jsonRequest<HairJobView>(`/api/v1/hair-jobs/${job.id}/retry`, { method: "POST", headers: authHeaders(accessToken.current, true), body: JSON.stringify({ assetIds: [id] }) });
       setJob(current);
-    } catch { setError("单张重试失败，请稍后再试。"); }
+    } catch (retryError) {
+      const code = retryError instanceof Error ? retryError.message : "retry_failed";
+      setError(ERROR_MESSAGES[code] || "单张重试失败，请稍后再试。");
+    }
     finally { setBusyAsset(undefined); }
   }
 
@@ -264,7 +268,7 @@ export function HairApp() {
           <div className="section-heading"><p className="eyebrow">START / 开始分析</p><h2 id="upload-title">上传一张清晰正面照</h2></div>
           {!file ? <div className="upload-card">
             <div className="scan-frame"><span /><span /><span /><span /><b>正面 · 单人 · 自然光</b></div>
-            <div className="upload-copy"><h3>让头顶、发际线和耳侧完整入镜</h3><p>支持 JPEG、PNG、WebP，最大 15MB。建议自然表情、无遮挡、背景简洁。</p>
+            <div className="upload-copy"><h3>让头顶、发际线和耳侧完整入镜</h3><p>支持 JPEG、PNG、WebP，最大 15MB。建议自然表情、无遮挡、背景简洁。公开服务每位访客每小时最多生成 2 份报告。</p>
               <div className="upload-actions"><button className="primary-button" onClick={() => fileInput.current?.click()}>选择照片 <span>↗</span></button><button className="secondary-button" onClick={() => cameraInput.current?.click()}>立即拍照</button></div>
             </div>
           </div> : <div className="review-grid">

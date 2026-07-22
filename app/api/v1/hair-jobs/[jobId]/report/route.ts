@@ -8,7 +8,7 @@ export async function POST(request: Request, context: Context) {
   const { jobId } = await context.params;
   const job = await authorizeJob(request, jobId);
   if (!job) return Response.json({ error: "job_not_found" }, { status: 404 });
-  if (!['compositing', 'partial', 'completed'].includes(job.status)) return Response.json({ error: "job_not_ready" }, { status: 409 });
+  if (job.status !== "compositing") return Response.json({ error: "job_not_ready" }, { status: 409 });
   const form = await request.formData();
   const report = form.get("report");
   const preview = form.get("preview");

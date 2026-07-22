@@ -19,4 +19,12 @@ export const hairJobs = sqliteTable("hair_jobs", {
   updatedAt: integer("updated_at").notNull(),
   expiresAt: integer("expires_at").notNull(),
   deletedAt: integer("deleted_at"),
+  workLockUntil: integer("work_lock_until"),
 }, (table) => [index("hair_jobs_expires_idx").on(table.expiresAt)]);
+
+export const rateLimitBuckets = sqliteTable("rate_limit_buckets", {
+  key: text("rate_key").primaryKey(),
+  count: integer("count").notNull().default(0),
+  createdAt: integer("created_at").notNull(),
+  expiresAt: integer("expires_at").notNull(),
+}, (table) => [index("rate_limit_buckets_expires_idx").on(table.expiresAt)]);

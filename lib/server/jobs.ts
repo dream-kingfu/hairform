@@ -8,6 +8,11 @@ interface RuntimeBindings {
   ANALYSIS_MODEL?: string;
   IMAGE_MODEL?: string;
   DEMO_MODE?: string;
+  RATE_LIMIT_SALT?: string;
+  MAX_JOBS_PER_HOUR?: string;
+  MAX_JOBS_PER_DAY?: string;
+  MAX_RETRIES_PER_HOUR?: string;
+  MAX_GENERATION_UNITS_PER_DAY?: string;
 }
 
 export interface StoredJob {
@@ -27,6 +32,7 @@ export interface StoredJob {
   updated_at: number;
   expires_at: number;
   deleted_at: number | null;
+  work_lock_until: number | null;
 }
 
 export const bindings = env as unknown as RuntimeBindings;
@@ -64,10 +70,22 @@ export async function ensureSchema() {
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
       expires_at INTEGER NOT NULL,
-      deleted_at INTEGER
+      deleted_at INTEGER,
+      work_lock_until INTEGER
     )`),
     bindings.DB.prepare("CREATE INDEX IF NOT EXISTS hair_jobs_expires_idx ON hair_jobs (expires_at)"),
+    bindings.DB.prepare(`CREATE TABLE IF NOT EXISTS rate_limit_buckets (
+      rate_key TEXT PRIMARY KEY,
+      count INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL
+    )`),
+    bindings.DB.prepare("CREATE INDEX IF NOT EXISTS rate_limit_buckets_expires_idx ON rate_limit_buckets (expires_at)"),
   ]);
+  const columns = await bindings.DB.prepare("PRAGMA table_info(hair_jobs)").all<{ name: string }>();
+  if (!columns.results.some((column) => column.name === "work_lock_until")) {
+    await bindings.DB.prepare("ALTER TABLE hair_jobs ADD COLUMN work_lock_until INTEGER").run();
+  }
   schemaReady = true;
 }
 
@@ -148,12 +166,13 @@ export async function updateJob(jobId: string, patch: {
   reportKey?: string | null;
   previewKey?: string | null;
   errorCode?: string | null;
+  workLockUntil?: number | null;
 }) {
   const current = await getJob(jobId);
   if (!current) throw new Error("job_not_found");
   await bindings.DB.prepare(`UPDATE hair_jobs SET
     status = ?, progress = ?, analysis_json = ?, assets_json = ?, report_key = ?,
-    preview_key = ?, error_code = ?, updated_at = ? WHERE id = ?`)
+    preview_key = ?, error_code = ?, work_lock_until = ?, updated_at = ? WHERE id = ?`)
     .bind(
       patch.status ?? current.status,
       patch.progress ?? current.progress,
@@ -162,9 +181,45 @@ export async function updateJob(jobId: string, patch: {
       patch.reportKey === undefined ? current.report_key : patch.reportKey,
       patch.previewKey === undefined ? current.preview_key : patch.previewKey,
       patch.errorCode === undefined ? current.error_code : patch.errorCode,
+      patch.workLockUntil === undefined ? current.work_lock_until : patch.workLockUntil,
       Date.now(),
       jobId,
     )
+    .run();
+}
+
+const WORK_LOCK_MS = 6 * 60 * 1000;
+
+export async function claimInitialJob(jobId: string) {
+  await ensureSchema();
+  const now = Date.now();
+  return bindings.DB.prepare(`UPDATE hair_jobs SET
+    status = 'analyzing', progress = 12, work_lock_until = ?, updated_at = ?
+    WHERE id = ? AND status = 'validating'
+      AND (work_lock_until IS NULL OR work_lock_until <= ?)
+    RETURNING *`)
+    .bind(now + WORK_LOCK_MS, now, jobId, now)
+    .first<StoredJob>();
+}
+
+export async function claimRetryJob(jobId: string) {
+  await ensureSchema();
+  const now = Date.now();
+  return bindings.DB.prepare(`UPDATE hair_jobs SET
+    status = 'generating', progress = 24, work_lock_until = ?, updated_at = ?
+    WHERE id = ? AND status IN ('completed', 'partial', 'failed')
+      AND (work_lock_until IS NULL OR work_lock_until <= ?)
+    RETURNING *`)
+    .bind(now + WORK_LOCK_MS, now, jobId, now)
+    .first<StoredJob>();
+}
+
+export async function failJobWork(jobId: string, errorCode: string) {
+  await ensureSchema();
+  await bindings.DB.prepare(`UPDATE hair_jobs SET
+    status = 'failed', progress = 100, error_code = ?, work_lock_until = NULL, updated_at = ?
+    WHERE id = ?`)
+    .bind(errorCode, Date.now(), jobId)
     .run();
 }
 
@@ -234,6 +289,9 @@ export async function cleanupExpiredJobs() {
     .bind(Date.now())
     .all<StoredJob>();
   for (const job of result.results) await expireJob(job);
+  await bindings.DB.prepare("DELETE FROM rate_limit_buckets WHERE expires_at <= ?")
+    .bind(Date.now())
+    .run();
 }
 
 export function assetKey(jobId: string, id: AssetId | "original" | "mask" | "report" | "report_preview") {
