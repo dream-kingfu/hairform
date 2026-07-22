@@ -1,0 +1,20 @@
+CREATE TABLE `hair_jobs` (
+	`id` text PRIMARY KEY NOT NULL,
+	`token_hash` text NOT NULL,
+	`status` text NOT NULL,
+	`progress` integer DEFAULT 0 NOT NULL,
+	`original_key` text NOT NULL,
+	`mask_key` text,
+	`analysis_json` text,
+	`assets_json` text NOT NULL,
+	`report_key` text,
+	`preview_key` text,
+	`error_code` text,
+	`helpful` integer,
+	`selected_style_id` text,
+	`demo_mode` integer DEFAULT false NOT NULL,
+	`created_at` integer NOT NULL,
+	`updated_at` integer NOT NULL,
+	`expires_at` integer NOT NULL,
+	`deleted_at` integer
+);

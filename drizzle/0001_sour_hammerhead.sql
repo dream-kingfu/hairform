@@ -1,0 +1,1 @@
+CREATE INDEX `hair_jobs_expires_idx` ON `hair_jobs` (`expires_at`);
