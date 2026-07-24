@@ -3,8 +3,10 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getColor } from "@/lib/hair/catalog";
+import { barberBriefCopyText, buildBarberBrief, type BarberBrief } from "@/lib/hair/barber-brief";
 import { DENSITY_LABELS, FACE_LABELS, FOREHEAD_LABELS, FRINGE_LABELS, HAIRLINE_LABELS, PART_LABELS, SLOT_LABELS, STYLE_TRAIT_LABELS, TEXTURE_LABELS, UNDERTONE_LABELS, colorLabel, styleLabel } from "@/lib/hair/labels";
-import type { AssetId, BilingualLabel, HairJobView, JobAsset, JobStatus } from "@/lib/hair/types";
+import type { AssetId, BilingualLabel, HairJobView, HairSlot, JobAsset, JobStatus } from "@/lib/hair/types";
+import { composeBarberBriefCard } from "@/lib/client/barber-brief-card";
 import { inspectPhoto, type PhotoInspection } from "@/lib/client/photo-quality";
 import { composeHairReport } from "@/lib/client/report";
 
@@ -52,7 +54,7 @@ function statusRank(status: JobStatus) {
   return rank[status];
 }
 
-function AssetCard({ asset, job, onRetry }: { asset: JobAsset; job: HairJobView; onRetry: (id: AssetId) => void }) {
+function AssetCard({ asset, job, onRetry, onOpenBarberBrief }: { asset: JobAsset; job: HairJobView; onRetry: (id: AssetId) => void; onOpenBarberBrief: (id: HairSlot) => void }) {
   const recommendation = job.analysis?.hairstyleSlots.find((item) => item.slot === asset.id);
   const colorIndex = asset.id === "color_primary" ? 0 : 1;
   const color = asset.kind === "color" ? job.analysis?.colors[colorIndex] : undefined;
@@ -74,10 +76,81 @@ function AssetCard({ asset, job, onRetry }: { asset: JobAsset; job: HairJobView;
         {recommendation && <>
           <Bi value={styleLabel(recommendation.styleId)} />
           <div className="mini-tags"><span>{FRINGE_LABELS[recommendation.fringeId].zh}</span><span>{PART_LABELS[recommendation.partId].zh}</span></div>
+          {recommendation.slot !== "less_suitable" && asset.status === "ready" && asset.url && <button className="barber-brief-button" onClick={() => onOpenBarberBrief(recommendation.slot)}><span>给理发师看</span><small>BARBER BRIEF ↗</small></button>}
         </>}
         {color && <div className="color-line"><i style={{ background: getColor(color.colorId).hex }} /><span>{color.level ? `${color.level} 度` : "自然明度"}</span></div>}
       </div>
     </article>
+  );
+}
+
+function BarberBriefDialog({ brief, imageUrl, busy, notice, onClose, onCopy, onDownload, onShare }: {
+  brief: BarberBrief;
+  imageUrl: string;
+  busy?: "download" | "share";
+  notice?: string;
+  onClose: () => void;
+  onCopy: () => void;
+  onDownload: () => void;
+  onShare: () => void;
+}) {
+  const panel = useRef<HTMLDivElement>(null);
+  const closeButton = useRef<HTMLButtonElement>(null);
+  const onCloseRef = useRef(onClose);
+
+  useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
+
+  useEffect(() => {
+    const previousFocus = document.activeElement as HTMLElement | null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    closeButton.current?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { onCloseRef.current(); return; }
+      if (event.key !== "Tab" || !panel.current) return;
+      const focusable = Array.from(panel.current.querySelectorAll<HTMLElement>("button:not([disabled]), [href], [tabindex]:not([tabindex='-1'])"));
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      document.body.style.overflow = previousOverflow;
+      previousFocus?.focus();
+    };
+  }, []);
+
+  return (
+    <div className="barber-dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <div className="barber-dialog" role="dialog" aria-modal="true" aria-labelledby="barber-dialog-title" ref={panel}>
+        <header className="barber-dialog-header">
+          <div><p className="eyebrow">BARBER BRIEF / 理发师沟通卡</p><h2 id="barber-dialog-title">把想要的发型，说清楚。</h2></div>
+          <button className="barber-dialog-close" onClick={onClose} ref={closeButton} aria-label="关闭理发师沟通卡">关闭 ×</button>
+        </header>
+        <div className="barber-dialog-content">
+          <div className="barber-reference"><img src={imageUrl} alt={`${brief.styleName.zh}理发参考图`} /><span>REFERENCE / 参考图</span></div>
+          <div className="barber-summary">
+            <p className="eyebrow">TARGET STYLE</p>
+            <h3>{brief.styleName.zh}<small>{brief.styleName.en}</small></h3>
+            <div className="barber-spoken"><span>直接这样说 / SAY THIS</span><p>“{brief.spokenZh}”</p></div>
+          </div>
+        </div>
+        <div className="barber-spec-grid">
+          {brief.rows.map((row) => <div className="barber-spec" key={row.id}><Bi value={row.label} /><p>{row.value.zh}</p><small>{row.value.en}</small></div>)}
+        </div>
+        <div className="barber-guardrails">
+          <div className="barber-avoid"><strong>避免 / AVOID</strong><p>{brief.avoid.zh}</p><small>{brief.avoid.en}</small></div>
+          <div className="barber-confirm"><strong>现场确认 / CONFIRM IN PERSON</strong><p>{brief.confirm.zh}</p><small>{brief.confirm.en}</small></div>
+        </div>
+        <footer className="barber-dialog-actions">
+          <p aria-live="polite">{notice ?? "以参考图为目标，理发师可根据实际头型与发流微调。"}</p>
+          <div><button className="secondary-button" onClick={onCopy}>复制沟通话术</button><button className="secondary-button" disabled={Boolean(busy)} onClick={onDownload}>{busy === "download" ? "正在生成…" : "下载沟通卡 ↓"}</button><button className="primary-button" disabled={Boolean(busy)} onClick={onShare}>{busy === "share" ? "正在准备…" : "分享给理发师 ↗"}</button></div>
+        </footer>
+      </div>
+    </div>
   );
 }
 
@@ -95,6 +168,10 @@ export function HairApp() {
   const [error, setError] = useState<string>();
   const [feedback, setFeedback] = useState<boolean>();
   const [busyAsset, setBusyAsset] = useState<AssetId>();
+  const [selectedBriefSlot, setSelectedBriefSlot] = useState<HairSlot>();
+  const [selectedStyleId, setSelectedStyleId] = useState<string>();
+  const [briefBusy, setBriefBusy] = useState<"download" | "share">();
+  const [briefNotice, setBriefNotice] = useState<string>();
 
   const refreshJob = useCallback(async (jobId: string) => {
     try {
@@ -155,6 +232,13 @@ export function HairApp() {
   const resultReady = Boolean(job && ["completed", "partial"].includes(job.status));
   const recommendationAssets = job?.assets.filter((asset) => asset.kind === "hairstyle") ?? [];
   const colorAssets = job?.assets.filter((asset) => asset.kind === "color") ?? [];
+  const selectedBriefAsset = selectedBriefSlot ? recommendationAssets.find((asset) => asset.id === selectedBriefSlot && asset.status === "ready" && asset.url) : undefined;
+  const selectedRecommendation = selectedBriefSlot ? job?.analysis?.hairstyleSlots.find((item) => item.slot === selectedBriefSlot) : undefined;
+  const selectedBrief = job?.analysis && selectedRecommendation ? buildBarberBrief(job.analysis, selectedRecommendation, {
+    style: styleLabel(selectedRecommendation.styleId),
+    fringe: FRINGE_LABELS[selectedRecommendation.fringeId],
+    part: PART_LABELS[selectedRecommendation.partId],
+  }) : undefined;
 
   async function selectPhoto(nextFile?: File) {
     if (!nextFile) return;
@@ -215,8 +299,90 @@ export function HairApp() {
 
   async function submitFeedback(helpful: boolean) {
     if (!job || feedback !== undefined) return;
-    await jsonRequest(`/api/v1/hair-jobs/${job.id}/feedback`, { method: "POST", headers: authHeaders(accessToken.current, true), body: JSON.stringify({ helpful }) });
+    await jsonRequest(`/api/v1/hair-jobs/${job.id}/feedback`, { method: "POST", headers: authHeaders(accessToken.current, true), body: JSON.stringify({ helpful, selectedStyleId }) });
     setFeedback(helpful);
+  }
+
+  function openBarberBrief(slot: HairSlot) {
+    const recommendation = job?.analysis?.hairstyleSlots.find((item) => item.slot === slot);
+    if (!recommendation || slot === "less_suitable") return;
+    setSelectedBriefSlot(slot);
+    setSelectedStyleId(recommendation.styleId);
+    setBriefNotice(undefined);
+  }
+
+  function closeBarberBrief() {
+    if (briefBusy) return;
+    setSelectedBriefSlot(undefined);
+    setBriefNotice(undefined);
+  }
+
+  function saveBlob(blob: Blob, filename: string) {
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function copyBarberBrief() {
+    if (!selectedBrief) return;
+    const value = barberBriefCopyText(selectedBrief);
+    try {
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(value);
+      else {
+        const textArea = document.createElement("textarea");
+        textArea.value = value;
+        textArea.style.position = "fixed";
+        textArea.style.opacity = "0";
+        document.body.appendChild(textArea);
+        textArea.select();
+        document.execCommand("copy");
+        textArea.remove();
+      }
+      setBriefNotice("沟通话术已复制，可以直接发给理发师。");
+    } catch {
+      setBriefNotice("复制失败，请长按选择话术文字。");
+    }
+  }
+
+  async function createBarberBriefBlob() {
+    if (!selectedBrief || !selectedBriefAsset?.url) throw new Error("barber_brief_unavailable");
+    return composeBarberBriefCard(selectedBrief, selectedBriefAsset.url);
+  }
+
+  async function downloadBarberBrief() {
+    if (!selectedBrief || briefBusy) return;
+    setBriefBusy("download");
+    setBriefNotice(undefined);
+    try {
+      const blob = await createBarberBriefBlob();
+      saveBlob(blob, `hairform-barber-${selectedBrief.styleId}.png`);
+      setBriefNotice("1080 × 1920 沟通卡已保存。");
+    } catch {
+      setBriefNotice("沟通卡生成失败，请稍后再试。");
+    } finally { setBriefBusy(undefined); }
+  }
+
+  async function shareBarberBrief() {
+    if (!selectedBrief || briefBusy) return;
+    setBriefBusy("share");
+    setBriefNotice(undefined);
+    try {
+      const blob = await createBarberBriefBlob();
+      const file = new File([blob], `hairform-barber-${selectedBrief.styleId}.png`, { type: "image/png" });
+      if (navigator.share && navigator.canShare?.({ files: [file] })) {
+        await navigator.share({ title: `${selectedBrief.styleName.zh} · 理发师沟通卡`, text: selectedBrief.spokenZh, files: [file] });
+        setBriefNotice("沟通卡已分享。");
+      } else {
+        saveBlob(blob, file.name);
+        setBriefNotice("当前浏览器不支持文件分享，已改为下载沟通卡。");
+      }
+    } catch (shareError) {
+      if (shareError instanceof DOMException && shareError.name === "AbortError") setBriefNotice(undefined);
+      else setBriefNotice("分享失败，请下载后再发送给理发师。");
+    } finally { setBriefBusy(undefined); }
   }
 
   async function downloadReport() {
@@ -243,6 +409,7 @@ export function HairApp() {
     await jsonRequest(`/api/v1/hair-jobs/${job.id}`, { method: "DELETE", headers: authHeaders(accessToken.current) });
     localStorage.removeItem("hairform:lastJob");
     accessToken.current = undefined;
+    setSelectedBriefSlot(undefined); setSelectedStyleId(undefined); setBriefNotice(undefined);
     setJob(undefined); setFeedback(undefined); resetPhoto();
   }
 
@@ -306,9 +473,10 @@ export function HairApp() {
           <Bi value={FACE_LABELS[job.analysis.faceShape]} /><Bi value={TEXTURE_LABELS[job.analysis.hairTexture]} /><Bi value={DENSITY_LABELS[job.analysis.hairDensity]} /><Bi value={HAIRLINE_LABELS[job.analysis.hairline]} /><Bi value={FOREHEAD_LABELS[job.analysis.foreheadRatio]} /><Bi value={UNDERTONE_LABELS[job.analysis.skinUndertone]} />
         </div>
         <div className="result-section-heading"><p className="eyebrow">01 / HAIRSTYLES</p><h2>三种长度，一个避雷对照</h2></div>
-        <div className="asset-grid">{recommendationAssets.map((asset) => <AssetCard asset={asset} job={job} key={asset.id} onRetry={retryAsset} />)}</div>
+        <div className="barber-intro"><div><p className="eyebrow">NEW / BARBER BRIEF</p><h3>选中一款，带着明确参数去理发店。</h3></div><p>推荐卡片可生成独立沟通卡：先给一句能直接说的话，再列长度、层次、打薄和避坑参数。</p></div>
+        <div className="asset-grid">{recommendationAssets.map((asset) => <AssetCard asset={asset} job={job} key={asset.id} onRetry={retryAsset} onOpenBarberBrief={openBarberBrief} />)}</div>
         <div className="result-section-heading"><p className="eyebrow">02 / COLORS</p><h2>发色只做辅助，不抢五官</h2></div>
-        <div className="asset-grid color-grid">{colorAssets.map((asset) => <AssetCard asset={asset} job={job} key={asset.id} onRetry={retryAsset} />)}</div>
+        <div className="asset-grid color-grid">{colorAssets.map((asset) => <AssetCard asset={asset} job={job} key={asset.id} onRetry={retryAsset} onOpenBarberBrief={openBarberBrief} />)}</div>
         <div className="overall-card"><p className="eyebrow">OVERALL STYLE</p><h2>{job.analysis.styleTraitIds.map((id) => STYLE_TRAIT_LABELS[id]?.zh).filter(Boolean).join(" · ")}</h2><p>{styleLabel(job.analysis.hairstyleSlots[0].styleId).zh}优先，保留轻盈纹理与自然分缝。</p></div>
         {job.previewUrl && <div className="report-preview"><img src={job.previewUrl} alt="双语发型分析报告预览" /><div><p className="eyebrow">READY TO SAVE</p><h2>你的双语报告已排好</h2><p>2160 × 3840 PNG，适合保存到相册或直接发给发型师。</p><div className="report-actions"><button className="primary-button" onClick={downloadReport}>下载高清报告 ↓</button><button className="secondary-button" onClick={shareReport}>分享结果 ↗</button></div></div></div>}
         <div className="feedback-row"><div><p className="eyebrow">FEEDBACK</p><h3>这个结果对你有帮助吗？</h3></div><div><button disabled={feedback !== undefined} className={feedback === true ? "selected" : ""} onClick={() => void submitFeedback(true)}>有帮助</button><button disabled={feedback !== undefined} className={feedback === false ? "selected" : ""} onClick={() => void submitFeedback(false)}>没帮助</button></div></div>
@@ -316,6 +484,8 @@ export function HairApp() {
         {error && <p className="error-banner" role="alert">{error}</p>}
         <div className="result-footer"><span>结果将在 {new Date(job.expiresAt).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })} 自动删除</span><button className="danger-button" onClick={deleteCurrentJob}>立即删除全部数据</button></div>
       </section>}
+
+      {selectedBrief && selectedBriefAsset?.url && <BarberBriefDialog brief={selectedBrief} imageUrl={selectedBriefAsset.url} busy={briefBusy} notice={briefNotice} onClose={closeBarberBrief} onCopy={() => void copyBarberBrief()} onDownload={() => void downloadBarberBrief()} onShare={() => void shareBarberBrief()} />}
 
       <footer className="footer"><span>型格 HAIRFORM</span><p>视觉建议，不构成医学、植发或专业理发结论。</p><small>AI MEN&apos;S HAIR REPORT · 2026</small></footer>
     </main>

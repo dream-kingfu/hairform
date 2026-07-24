@@ -54,3 +54,22 @@ test("enforces public generation budgets without storing raw IP addresses", asyn
   assert.match(schema, /rate_limit_buckets/);
   assert.match(migration, /work_lock_until/);
 });
+
+test("ships a deterministic, downloadable barber brief without changing the main report", async () => {
+  const [app, brief, card, report] = await Promise.all([
+    readFile(new URL("../app/HairApp.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../lib/hair/barber-brief.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/client/barber-brief-card.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/client/report.ts", import.meta.url), "utf8"),
+  ]);
+  assert.match(app, /给理发师看/);
+  assert.match(app, /role="dialog"/);
+  assert.match(app, /barberBriefCopyText/);
+  assert.match(app, /selectedStyleId/);
+  assert.match(brief, /BARBER_BRIEF_CATALOG/);
+  assert.match(card, /const WIDTH = 1080/);
+  assert.match(card, /const HEIGHT = 1920/);
+  assert.match(report, /const WIDTH = 2160/);
+  assert.match(report, /const HEIGHT = 3840/);
+  assert.doesNotMatch(brief, /openai|image generation|promptTraits/);
+});
