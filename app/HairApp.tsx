@@ -422,7 +422,7 @@ export function HairApp() {
     <main className="site-shell">
       <header className="topbar">
         <a className="brand" href="#top" aria-label="型格首页"><span>型格</span><small>HAIRFORM</small></a>
-        <div className="topbar-meta"><span>AI MEN&apos;S HAIR</span><span className="privacy-dot" />24H PRIVATE</div>
+        <div className="topbar-meta"><span>V0.2 · AI MEN&apos;S HAIR</span><span className="privacy-dot" />24H PRIVATE</div>
       </header>
 
       {!job && <>

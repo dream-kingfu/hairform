@@ -1,6 +1,7 @@
 import { HAIR_COLOR_CATALOG, HAIRSTYLE_CATALOG, getColor, getStyle } from "@/lib/hair/catalog";
 import type { AssetId, HairAnalysis, HairColorRecommendation, HairstyleRecommendation } from "@/lib/hair/types";
 import { bindings, isDemoMode } from "./jobs";
+import { describeKieResponseShape, extractKieResponseText } from "./kie-response";
 
 const KIE_DEFAULT_API_BASE = "https://api.kie.ai";
 const KIE_DEFAULT_UPLOAD_BASE = "https://kieai.redpandaai.co";
@@ -153,9 +154,11 @@ async function kieJson(url: string, init: RequestInit, timeout?: number) {
       .filter((line) => line.startsWith("data:"))
       .map((line) => line.slice(5).trim())
       .filter((line) => line && line !== "[DONE]");
-    for (let index = events.length - 1; index >= 0; index -= 1) {
-      try { return JSON.parse(events[index]) as Record<string, unknown>; } catch { /* keep scanning */ }
+    const parsedEvents: Record<string, unknown>[] = [];
+    for (const event of events) {
+      try { parsedEvents.push(JSON.parse(event) as Record<string, unknown>); } catch { /* ignore malformed SSE frames */ }
     }
+    if (parsedEvents.length) return { events: parsedEvents };
     throw new Error("model_request_failed");
   }
 }
@@ -288,15 +291,12 @@ async function downloadKieImage(url: string) {
 }
 
 function responseText(payload: Record<string, unknown>) {
-  if (typeof payload.output_text === "string") return payload.output_text;
-  const output = Array.isArray(payload.output) ? payload.output : [];
-  for (const item of output as Array<Record<string, unknown>>) {
-    const content = Array.isArray(item.content) ? item.content : [];
-    for (const part of content as Array<Record<string, unknown>>) {
-      if (part.type === "output_text" && typeof part.text === "string") return part.text;
-    }
+  try {
+    return extractKieResponseText(payload);
+  } catch (error) {
+    if (isKie()) console.error("Unsupported Kie response envelope", describeKieResponseShape(payload));
+    throw error;
   }
-  throw new Error("analysis_output_missing");
 }
 
 export function demoAnalysis(): HairAnalysis {
