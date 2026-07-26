@@ -24,6 +24,10 @@ export async function POST(request: Request, context: Context) {
     return Response.json(processed ? toJobView(processed) : { error: "job_not_found" });
   } catch (error) {
     const errorCode = safeErrorCode(error);
+    console.error("Hair job processing failed", {
+      errorCode,
+      name: error instanceof Error ? error.name : "UnknownError",
+    });
     await failJobWork(jobId, errorCode);
     return Response.json({ error: errorCode }, { status: 500 });
   }

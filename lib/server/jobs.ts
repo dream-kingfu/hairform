@@ -227,7 +227,7 @@ export async function claimRetryJob(jobId: string) {
 export async function failJobWork(jobId: string, errorCode: string) {
   await ensureSchema();
   await bindings.DB.prepare(`UPDATE hair_jobs SET
-    status = 'failed', progress = 100, error_code = ?, work_lock_until = NULL, updated_at = ?
+    status = 'failed', error_code = ?, work_lock_until = NULL, updated_at = ?
     WHERE id = ?`)
     .bind(errorCode, Date.now(), jobId)
     .run();

@@ -164,14 +164,27 @@ async function uploadKieImage(bytes: ArrayBuffer, contentType: string) {
   const cached = kieUploadCache.get(bytes);
   if (cached) return cached;
   const uploading = (async () => {
-    const form = new FormData();
     const extension = contentType === "image/jpeg" ? "jpg" : contentType === "image/webp" ? "webp" : "png";
-    form.append("file", new File([bytes], `hairform-${crypto.randomUUID()}.${extension}`, { type: contentType }));
-    form.append("uploadPath", "hairform/portraits");
-    const payload = await kieJson(`${bindings.KIE_UPLOAD_BASE || KIE_DEFAULT_UPLOAD_BASE}/api/file-stream-upload`, {
-      method: "POST",
-      body: form,
-    });
+    const filename = `hairform-${crypto.randomUUID()}.${extension}`;
+    const uploadBase = bindings.KIE_UPLOAD_BASE || KIE_DEFAULT_UPLOAD_BASE;
+    let payload: Record<string, unknown>;
+    if (bytes.byteLength <= 2 * 1024 * 1024) {
+      payload = await kieJson(`${uploadBase}/api/file-base64-upload`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          base64Data: dataUrl(bytes, contentType),
+          uploadPath: "hairform/portraits",
+          fileName: filename,
+        }),
+      });
+    } else {
+      const form = new FormData();
+      form.append("file", new File([bytes], filename, { type: contentType }));
+      form.append("uploadPath", "hairform/portraits");
+      form.append("fileName", filename);
+      payload = await kieJson(`${uploadBase}/api/file-stream-upload`, { method: "POST", body: form });
+    }
     const data = payload.data as Record<string, unknown> | undefined;
     const url = typeof data?.downloadUrl === "string" ? data.downloadUrl : typeof data?.fileUrl === "string" ? data.fileUrl : undefined;
     if (!url) throw new Error("image_upload_failed");
@@ -182,6 +195,10 @@ async function uploadKieImage(bytes: ArrayBuffer, contentType: string) {
     return await uploading;
   } catch (error) {
     kieUploadCache.delete(bytes);
+    console.error("Kie portrait upload failed", {
+      code: safeErrorCode(error),
+      name: error instanceof Error ? error.name : "UnknownError",
+    });
     throw error;
   }
 }

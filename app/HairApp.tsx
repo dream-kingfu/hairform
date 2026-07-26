@@ -53,7 +53,8 @@ async function jsonRequest<T>(url: string, init?: RequestInit): Promise<T> {
   return payload;
 }
 
-function statusRank(status: JobStatus) {
+function statusRank(status: JobStatus, progress = 0) {
+  if (status === "failed") return progress < 22 ? 1 : progress < 92 ? 2 : 3;
   const rank: Record<JobStatus, number> = { validating: 0, analyzing: 1, generating: 2, compositing: 3, completed: 4, partial: 4, failed: 4, expired: 4, deleted: 4 };
   return rank[status];
 }
@@ -462,12 +463,12 @@ export function HairApp() {
       {job && !resultReady && <section className="progress-page">
         <div className="progress-heading"><p className="eyebrow">ANALYSIS IN PROGRESS</p><h1>正在为你生成<br />六张真人预览<span>。</span></h1>{job.demoMode && <p className="demo-notice">演示模式：当前未配置 AI 服务密钥，流程和报告可完整体验，预览暂用原图占位。</p>}</div>
         <div className="progress-meter"><div style={{ width: `${job.progress}%` }} /><strong>{job.progress}%</strong></div>
-        <ol className="status-steps">{STATUS_STEPS.map((step, index) => { const current = statusRank(job.status); return <li className={index < current ? "done" : index === current ? "active" : ""} key={step.status}><span>{String(index + 1).padStart(2, "0")}</span><b>{step.zh}</b><small>{step.en}</small></li>; })}</ol>
+        <ol className="status-steps">{STATUS_STEPS.map((step, index) => { const current = statusRank(job.status, job.progress); return <li className={index < current ? "done" : index === current ? "active" : ""} key={step.status}><span>{String(index + 1).padStart(2, "0")}</span><b>{step.zh}</b><small>{step.en}</small></li>; })}</ol>
         <div className="generating-grid">{(job.assets.length ? job.assets : [
           { id: "best_short", kind: "hairstyle", status: "pending" }, { id: "best_medium", kind: "hairstyle", status: "pending" }, { id: "best_long", kind: "hairstyle", status: "pending" }, { id: "less_suitable", kind: "hairstyle", status: "pending" }, { id: "color_primary", kind: "color", status: "pending" }, { id: "color_secondary", kind: "color", status: "pending" },
         ] as JobAsset[]).map((asset) => <div className={`generating-tile ${asset.status}`} key={asset.id}><span>✦</span><b>{asset.id.replaceAll("_", " ")}</b><small>{asset.status === "ready" ? "READY" : asset.status === "failed" ? "RETRY AVAILABLE" : "GENERATING"}</small></div>)}</div>
         {job.status === "failed" && <><p className="error-banner" role="alert">{ERROR_MESSAGES[job.errorCode ?? ""] || ERROR_MESSAGES.processing_failed}</p><button className="secondary-button" onClick={() => { localStorage.removeItem("hairform:lastJob"); accessToken.current = undefined; setJob(undefined); }}>重新开始</button></>}
-        {error && <p className="error-banner" role="alert">{error}</p>}
+        {error && !(job.status === "failed" && job.errorCode) && <p className="error-banner" role="alert">{error}</p>}
       </section>}
 
       {job && resultReady && job.analysis && <section className="results-page">

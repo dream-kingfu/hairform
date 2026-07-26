@@ -9,6 +9,8 @@ const envExample = await readFile(new URL("../.env.example", import.meta.url), "
 test("uses Kie file upload and asynchronous GPT Image 2 task APIs", () => {
   assert.match(providerSource, /kieai\.redpandaai\.co/);
   assert.match(providerSource, /\/api\/file-stream-upload/);
+  assert.match(providerSource, /\/api\/file-base64-upload/);
+  assert.match(providerSource, /bytes\.byteLength <= 2 \* 1024 \* 1024/);
   assert.match(providerSource, /\/api\/v1\/jobs\/createTask/);
   assert.match(providerSource, /gpt-image-2-image-to-image/);
   assert.match(providerSource, /\/api\/v1\/jobs\/recordInfo\?taskId=/);
