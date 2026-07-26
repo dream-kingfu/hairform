@@ -14,6 +14,7 @@ test("uses Kie file upload and asynchronous GPT Image 2 task APIs", () => {
   assert.match(providerSource, /\/api\/v1\/jobs\/recordInfo\?taskId=/);
   assert.match(providerSource, /resultUrls/);
   assert.match(providerSource, /downloadKieImage/);
+  assert.match(providerSource, /const fallback = isKie\(\) \? 1 : 3/);
 });
 
 test("keeps Kie secrets server-side and demo mode safe", () => {

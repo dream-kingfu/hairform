@@ -1,5 +1,5 @@
 import type { AssetId, HairAnalysis, JobAsset } from "@/lib/hair/types";
-import { analyzePortrait, editPortrait, qualityCheck, safeErrorCode } from "./openai";
+import { analyzePortrait, editPortrait, generationBatchSize, qualityCheck, safeErrorCode } from "./openai";
 import { assetKey, bindings, getJob, parseAssets, putAsset, updateJob, type StoredJob } from "./jobs";
 
 async function sourceBytes(job: StoredJob) {
@@ -68,8 +68,9 @@ export async function processJob(job: StoredJob, onlyIds?: AssetId[]) {
   await updateJob(job.id, { status: "generating", progress: 24, assets, reportKey: null, previewKey: null });
 
   const pending = assets.filter((asset) => targetIds.has(asset.id));
-  for (let start = 0; start < pending.length; start += 3) {
-    const batch = pending.slice(start, start + 3);
+  const batchSize = generationBatchSize();
+  for (let start = 0; start < pending.length; start += batchSize) {
+    const batch = pending.slice(start, start + batchSize);
     assets = assets.map((asset) => batch.some((item) => item.id === asset.id) ? { ...asset, status: "generating" } : asset);
     await updateJob(job.id, { assets, progress: 25 + Math.round((start / Math.max(pending.length, 1)) * 62) });
     const results = await Promise.all(batch.map((asset) => generateOne({ job, asset, analysis: analysis!, image, contentType, mask })));

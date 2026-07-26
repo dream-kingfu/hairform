@@ -20,6 +20,7 @@ interface RuntimeBindings {
   MAX_JOBS_PER_DAY?: string;
   MAX_RETRIES_PER_HOUR?: string;
   MAX_GENERATION_UNITS_PER_DAY?: string;
+  GENERATION_CONCURRENCY?: string;
 }
 
 export interface StoredJob {

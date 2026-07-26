@@ -14,6 +14,12 @@ function isKie() {
   return provider() === "kie";
 }
 
+export function generationBatchSize() {
+  const fallback = isKie() ? 1 : 3;
+  const parsed = Number.parseInt(bindings.GENERATION_CONCURRENCY || "", 10);
+  return Number.isFinite(parsed) ? Math.min(3, Math.max(1, parsed)) : fallback;
+}
+
 const ANALYSIS_MODEL = () => isKie()
   ? bindings.KIE_ANALYSIS_MODEL || "gpt-5-6-terra"
   : bindings.ANALYSIS_MODEL || "gpt-5.6-terra";
