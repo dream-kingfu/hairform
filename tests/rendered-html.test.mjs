@@ -73,3 +73,18 @@ test("ships a deterministic, downloadable barber brief without changing the main
   assert.match(report, /const HEIGHT = 3840/);
   assert.doesNotMatch(brief, /openai|image generation|promptTraits/);
 });
+
+test("exposes native mini-program presentation and split report uploads", async () => {
+  const [presentation, reportAssets, jobs, types] = await Promise.all([
+    readFile(new URL("../lib/hair/presentation.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/v1/hair-jobs/[jobId]/report-assets/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/server/jobs.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/hair/types.ts", import.meta.url), "utf8"),
+  ]);
+  assert.match(presentation, /buildHairPresentation/);
+  assert.match(presentation, /buildBarberBrief/);
+  assert.match(reportAssets, /kind !== "report" && kind !== "preview"/);
+  assert.match(reportAssets, /REPORT_MAX_SIZE/);
+  assert.match(jobs, /presentation: analysis \? buildHairPresentation/);
+  assert.match(types, /HairJobPresentation/);
+});

@@ -1,3 +1,5 @@
+import type { BarberBrief } from "./barber-brief";
+
 export type FaceShape =
   | "oval"
   | "round"
@@ -75,9 +77,36 @@ export interface HairJobView {
   expiresAt: string;
   demoMode: boolean;
   errorCode?: string;
+  presentation?: HairJobPresentation;
 }
 
 export interface BilingualLabel {
   zh: string;
   en: string;
+}
+
+export interface HairJobPresentation {
+  traits: Array<{
+    id: string;
+    kind: "faceShape" | "hairTexture" | "hairDensity" | "hairline" | "foreheadRatio" | "skinUndertone" | "styleTrait";
+    label: BilingualLabel;
+  }>;
+  hairstyles: Array<{
+    assetId: HairSlot;
+    slotLabel: BilingualLabel;
+    styleId: string;
+    styleLabel: BilingualLabel;
+    lengthLabel: BilingualLabel;
+    fringeLabel: BilingualLabel;
+    partLabel: BilingualLabel;
+    barberBrief?: BarberBrief;
+  }>;
+  colors: Array<{
+    assetId: "color_primary" | "color_secondary";
+    colorId: string;
+    label: BilingualLabel;
+    swatchHex: string;
+    levelLabel: BilingualLabel;
+  }>;
+  overallStyle: BilingualLabel;
 }

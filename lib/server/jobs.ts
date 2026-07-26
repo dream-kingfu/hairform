@@ -1,5 +1,6 @@
 import { env } from "cloudflare:workers";
 import type { AssetId, HairAnalysis, HairJobView, JobAsset, JobStatus } from "@/lib/hair/types";
+import { buildHairPresentation } from "@/lib/hair/presentation";
 
 interface RuntimeBindings {
   DB: D1Database;
@@ -251,6 +252,7 @@ export function toJobView(job: StoredJob): HairJobView {
     expiresAt: new Date(job.expires_at).toISOString(),
     demoMode: Boolean(job.demo_mode),
     errorCode: job.error_code ?? undefined,
+    presentation: analysis ? buildHairPresentation(analysis) : undefined,
   };
 }
 
