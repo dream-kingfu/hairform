@@ -31,6 +31,8 @@ test("uses Kie multimodal analysis without changing the fixed catalog contract",
   assert.match(providerSource, /json_schema/);
   assert.match(providerSource, /if \(!isKie\(\)\) body\.text/);
   assert.match(providerSource, /does not include OpenAI's text\.format\/json_schema option/);
+  assert.match(providerSource, /Required JSON Schema/);
+  assert.match(providerSource, /JSON\.stringify\(qcSchema\)/);
   assert.match(providerSource, /normalizeAnalysis/);
   assert.match(providerSource, /HAIRSTYLE_CATALOG/);
 });

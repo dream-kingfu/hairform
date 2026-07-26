@@ -322,7 +322,7 @@ function normalizeAnalysis(value: HairAnalysis): HairAnalysis {
 export async function analyzePortrait(image: ArrayBuffer, contentType: string) {
   if (isDemoMode()) return demoAnalysis();
   const catalog = HAIRSTYLE_CATALOG.map(({ id, length, fringeId, partId, textures, densities, faceShapes }) => ({ id, length, fringeId, partId, textures, densities, faceShapes }));
-  const prompt = `Analyze this single front-facing male portrait for hairstyle recommendation. Return exactly one valid JSON object matching the requested structure, with no Markdown or commentary. First check photo suitability and add only these warning ids when present: side_angle, hat, hairline_occluded, multiple_faces, no_face, too_dark, face_too_small. Add single_front_photo_estimate for an otherwise usable photo. Treat hair density, hairline, forehead and undertone as visual estimates; use unknown whenever the photo does not support a reliable judgment. Select exactly one catalog style for each slot: best short, best medium, best long, and one less suitable comparison. Select two conservative hair colors. Do not infer identity, ethnicity, health, personality, attractiveness, or age. Catalog: ${JSON.stringify(catalog)}.`;
+  const prompt = `Analyze this single front-facing male portrait for hairstyle recommendation. Return exactly one valid JSON object matching the required JSON Schema, with no Markdown or commentary. First check photo suitability and add only these warning ids when present: side_angle, hat, hairline_occluded, multiple_faces, no_face, too_dark, face_too_small. Add single_front_photo_estimate for an otherwise usable photo. Treat hair density, hairline, forehead and undertone as visual estimates; use unknown whenever the photo does not support a reliable judgment. Select exactly one catalog style for each slot: best short, best medium, best long, and one less suitable comparison. Select two conservative hair colors. Do not infer identity, ethnicity, health, personality, attractiveness, or age. Required JSON Schema: ${JSON.stringify(analysisSchema)}. Catalog: ${JSON.stringify(catalog)}.`;
   const imageUrl = isKie() ? await uploadKieImage(image, contentType) : dataUrl(image, contentType);
   const requestBody = responsesBody(
     [{ role: "user", content: [{ type: "input_text", text: prompt }, { type: "input_image", image_url: imageUrl }] }],
@@ -409,7 +409,7 @@ export async function qualityCheck(input: {
   const outputUrl = isKie() ? await uploadKieImage(input.output, input.outputType) : dataUrl(input.output, input.outputType);
   const requestBody = responsesBody(
     [{ role: "user", content: [
-        { type: "input_text", text: `Compare the original portrait and edited result. Target: ${target}. Check only same-person visual consistency, preservation of non-hair regions, target hair match, and obvious rendering artifacts. This is not identity recognition.` },
+        { type: "input_text", text: `Compare the original portrait and edited result. Target: ${target}. Check only same-person visual consistency, preservation of non-hair regions, target hair match, and obvious rendering artifacts. This is not identity recognition. Return exactly one valid JSON object matching this JSON Schema, with no Markdown or commentary: ${JSON.stringify(qcSchema)}.` },
         { type: "input_image", image_url: originalUrl },
         { type: "input_image", image_url: outputUrl },
       ] }],
