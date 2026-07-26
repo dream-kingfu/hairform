@@ -56,3 +56,11 @@ npm test
 ```
 
 真实视觉验收仍需使用不少于 30 张获得授权的男性正面肖像完成，重点检查身份一致性、发型目标匹配和非头发区域保护。
+
+## License / 许可证
+
+本项目采用 [GNU Affero General Public License v3.0](LICENSE)（`AGPL-3.0-only`）。你可以使用、研究、修改和分发本项目，包括商业使用；如果你分发修改版本，或通过网络向用户提供修改版本的服务，必须按 AGPL-3.0 提供相应源代码并保留许可证声明。
+
+Copyright © 2026 dream-kingfu.
+
+This project is licensed under the [GNU Affero General Public License v3.0](LICENSE) (`AGPL-3.0-only`). Modified versions distributed or made available to users over a network must provide the corresponding source code under the AGPL-3.0 terms.
