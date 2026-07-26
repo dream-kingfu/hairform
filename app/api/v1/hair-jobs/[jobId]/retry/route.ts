@@ -1,6 +1,6 @@
 import type { AssetId } from "@/lib/hair/types";
 import { authorizeJob, claimRetryJob, failJobWork, toJobView } from "@/lib/server/jobs";
-import { processJob } from "@/lib/server/processor";
+import { processLegacyJob } from "@/lib/server/processor";
 import { consumeRetryLimit, rateLimitResponse } from "@/lib/server/rate-limit";
 
 export const dynamic = "force-dynamic";
@@ -11,6 +11,7 @@ export async function POST(request: Request, context: Context) {
   const { jobId } = await context.params;
   const job = await authorizeJob(request, jobId);
   if (!job) return Response.json({ error: "job_not_found" }, { status: 404 });
+  if (job.generation_policy === "single-preview-v1") return Response.json({ error: "image_call_limit_reached" }, { status: 409 });
   const payload = await request.json().catch(() => ({})) as { assetIds?: string[] };
   const assetIds = (payload.assetIds ?? []).filter((id): id is AssetId => IDS.has(id as AssetId));
   if (!assetIds.length) return Response.json({ error: "asset_ids_required" }, { status: 400 });
@@ -20,7 +21,7 @@ export async function POST(request: Request, context: Context) {
   const claimed = await claimRetryJob(jobId);
   if (!claimed) return Response.json({ error: "job_busy" }, { status: 409 });
   try {
-    const processed = await processJob(claimed, assetIds);
+    const processed = await processLegacyJob(claimed, assetIds);
     return Response.json(processed ? toJobView(processed) : { error: "job_not_found" });
   } catch {
     await failJobWork(jobId, "retry_failed");

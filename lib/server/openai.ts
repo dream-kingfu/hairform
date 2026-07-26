@@ -2,13 +2,15 @@ import { HAIR_COLOR_CATALOG, HAIRSTYLE_CATALOG, getColor, getStyle } from "@/lib
 import type { AssetId, HairAnalysis, HairColorRecommendation, HairstyleRecommendation } from "@/lib/hair/types";
 import { bindings, isDemoMode } from "./jobs";
 import { describeKieResponseShape, extractKieResponseText } from "./kie-response";
+import { assertProductionModelPolicy, modelFor, reasoningFor, type ModelPurpose } from "./model-policy";
+import { recordProviderFailure, recordProviderSuccess } from "./provider-health";
 
 const KIE_DEFAULT_API_BASE = "https://api.kie.ai";
 const KIE_DEFAULT_UPLOAD_BASE = "https://kieai.redpandaai.co";
 const kieUploadCache = new WeakMap<ArrayBuffer, Promise<string>>();
 
 function provider() {
-  return bindings.AI_PROVIDER?.trim().toLowerCase() || (bindings.KIE_API_KEY ? "kie" : "openai");
+  return bindings.AI_PROVIDER?.trim().toLowerCase() || "kie";
 }
 
 function isKie() {
@@ -21,12 +23,8 @@ export function generationBatchSize() {
   return Number.isFinite(parsed) ? Math.min(3, Math.max(1, parsed)) : fallback;
 }
 
-const ANALYSIS_MODEL = () => isKie()
-  ? bindings.KIE_ANALYSIS_MODEL || "gpt-5-6-terra"
-  : bindings.ANALYSIS_MODEL || "gpt-5.6-terra";
-const IMAGE_MODEL = () => isKie()
-  ? bindings.KIE_IMAGE_MODEL || "gpt-image-2-image-to-image"
-  : bindings.IMAGE_MODEL || "gpt-image-2-2026-04-21";
+const ANALYSIS_MODEL = () => isKie() ? modelFor("analysis") : bindings.ANALYSIS_MODEL || "gpt-5.6-terra";
+const IMAGE_MODEL = () => isKie() ? modelFor("image_edit") : bindings.IMAGE_MODEL || "gpt-image-2-2026-04-21";
 
 const analysisSchema = {
   type: "object",
@@ -122,11 +120,17 @@ function kieHeaders(headers?: HeadersInit) {
 }
 
 async function kieRequest(url: string, init: RequestInit, timeout = 150_000) {
-  const response = await fetch(url, {
-    ...init,
-    headers: kieHeaders(init.headers),
-    signal: AbortSignal.timeout(timeout),
-  });
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...init,
+      headers: kieHeaders(init.headers),
+      signal: AbortSignal.timeout(timeout),
+    });
+  } catch (error) {
+    await recordProviderFailure();
+    throw error;
+  }
   if (!response.ok) {
     const body = await response.text();
     const code = response.status === 401
@@ -139,8 +143,10 @@ async function kieRequest(url: string, init: RequestInit, timeout = 150_000) {
             ? "moderation_blocked"
             : "model_request_failed";
     console.error("Kie request failed", { endpoint: new URL(url).pathname, status: response.status, code });
+    if (response.status === 429 || response.status === 455 || response.status >= 500) await recordProviderFailure();
     throw new Error(code);
   }
+  await recordProviderSuccess();
   return response;
 }
 
@@ -207,6 +213,7 @@ async function uploadKieImage(bytes: ArrayBuffer, contentType: string) {
 }
 
 async function kieResponsesRequest(body: Record<string, unknown>) {
+  assertProductionModelPolicy(bindings);
   return kieJson(`${bindings.KIE_API_BASE || KIE_DEFAULT_API_BASE}/codex/v1/responses`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -214,8 +221,12 @@ async function kieResponsesRequest(body: Record<string, unknown>) {
   });
 }
 
-function responsesBody(input: Array<Record<string, unknown>>, name: string, schema: Record<string, unknown>) {
-  const body: Record<string, unknown> = { model: ANALYSIS_MODEL(), input };
+function responsesBody(input: Array<Record<string, unknown>>, name: string, schema: Record<string, unknown>, purpose: Exclude<ModelPurpose, "image_edit">) {
+  const body: Record<string, unknown> = {
+    model: isKie() ? modelFor(purpose) : ANALYSIS_MODEL(),
+    input,
+    reasoning: { effort: reasoningFor(purpose) },
+  };
   // Kie Terra accepts multimodal Responses input, but its documented contract
   // does not include OpenAI's text.format/json_schema option.
   if (!isKie()) body.text = { format: { type: "json_schema", name, strict: true, schema } };
@@ -234,13 +245,13 @@ function wait(delay: number) {
   return new Promise((resolve) => setTimeout(resolve, delay));
 }
 
-async function createKieImageTask(prompt: string, inputUrl: string) {
+async function createKieImageTask(prompt: string, inputUrls: string[]) {
   const payload = await kieJson(`${bindings.KIE_API_BASE || KIE_DEFAULT_API_BASE}/api/v1/jobs/createTask`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       model: IMAGE_MODEL(),
-      input: { prompt, input_urls: [inputUrl], aspect_ratio: "auto" },
+      input: { prompt, input_urls: inputUrls, aspect_ratio: "auto" },
     }),
   });
   const taskId = (payload.data as Record<string, unknown> | undefined)?.taskId;
@@ -338,6 +349,7 @@ function normalizeAnalysis(value: HairAnalysis): HairAnalysis {
 
 export async function analyzePortrait(image: ArrayBuffer, contentType: string) {
   if (isDemoMode()) return demoAnalysis();
+  assertProductionModelPolicy(bindings);
   const catalog = HAIRSTYLE_CATALOG.map(({ id, length, fringeId, partId, textures, densities, faceShapes }) => ({ id, length, fringeId, partId, textures, densities, faceShapes }));
   const prompt = `Analyze this single front-facing male portrait for hairstyle recommendation. Return exactly one valid JSON object matching the required JSON Schema, with no Markdown or commentary. First check photo suitability and add only these warning ids when present: side_angle, hat, hairline_occluded, multiple_faces, no_face, too_dark, face_too_small. Add single_front_photo_estimate for an otherwise usable photo. Treat hair density, hairline, forehead and undertone as visual estimates; use unknown whenever the photo does not support a reliable judgment. Select exactly one catalog style for each slot: best short, best medium, best long, and one less suitable comparison. Select two conservative hair colors. Do not infer identity, ethnicity, health, personality, attractiveness, or age. Required JSON Schema: ${JSON.stringify(analysisSchema)}. Catalog: ${JSON.stringify(catalog)}.`;
   const imageUrl = isKie() ? await uploadKieImage(image, contentType) : dataUrl(image, contentType);
@@ -345,6 +357,7 @@ export async function analyzePortrait(image: ArrayBuffer, contentType: string) {
     [{ role: "user", content: [{ type: "input_text", text: prompt }, { type: "input_image", image_url: imageUrl }] }],
     "hair_analysis",
     analysisSchema,
+    "analysis",
   );
   const payload = isKie()
     ? await kieResponsesRequest(requestBody)
@@ -379,15 +392,20 @@ export async function editPortrait(input: {
   mask?: ArrayBuffer;
 }) {
   if (isDemoMode()) return { bytes: input.image.slice(0), contentType: input.contentType };
+  assertProductionModelPolicy(bindings);
   const style = input.analysis.hairstyleSlots.find((item) => item.slot === input.id);
   const colorIndex = input.id === "color_primary" ? 0 : 1;
   const color = input.analysis.colors[colorIndex];
   const prompt = style ? hairstylePrompt(style) : colorPrompt(color);
   if (isKie()) {
+    assertProductionModelPolicy(bindings);
     const inputUrl = await uploadKieImage(input.image, input.contentType);
+    const maskUrl = input.mask ? await uploadKieImage(input.mask, "image/png") : undefined;
     const taskId = await createKieImageTask(
-      input.mask ? `${prompt} This is a retry: preserve every non-hair pixel as closely as possible and make the edit strictly local to scalp hair.` : prompt,
-      inputUrl,
+      maskUrl
+        ? `${prompt} This is a retry. The second input image is a binary edit guide: change only the white hair region and preserve every black region as closely as possible.`
+        : prompt,
+      maskUrl ? [inputUrl, maskUrl] : [inputUrl],
     );
     return downloadKieImage(await waitForKieImage(taskId));
   }
@@ -410,6 +428,14 @@ export async function editPortrait(input: {
   return { bytes: result.buffer, contentType: "image/png" };
 }
 
+export interface QualityCheckResult {
+  identityPreserved: boolean;
+  hairTargetMatched: boolean;
+  nonHairRegionPreserved: boolean;
+  artifactFree: boolean;
+  confidence: number;
+}
+
 export async function qualityCheck(input: {
   id: AssetId;
   original: ArrayBuffer;
@@ -417,8 +443,9 @@ export async function qualityCheck(input: {
   outputType: string;
   originalType: string;
   analysis: HairAnalysis;
-}) {
-  if (isDemoMode()) return true;
+}, purpose: "quality" | "quality_escalation" = "quality"): Promise<QualityCheckResult> {
+  if (isDemoMode()) return { identityPreserved: true, hairTargetMatched: true, nonHairRegionPreserved: true, artifactFree: true, confidence: 1 };
+  assertProductionModelPolicy(bindings);
   const style = input.analysis.hairstyleSlots.find((item) => item.slot === input.id);
   const color = input.id === "color_primary" ? input.analysis.colors[0] : input.id === "color_secondary" ? input.analysis.colors[1] : undefined;
   const target = style ? `${style.styleId}, fringe ${style.fringeId}, part ${style.partId}` : `hair color ${color?.colorId}, unchanged hairstyle`;
@@ -432,6 +459,7 @@ export async function qualityCheck(input: {
       ] }],
     "hair_preview_qc",
     qcSchema,
+    purpose,
   );
   const payload = isKie()
     ? await kieResponsesRequest(requestBody)
@@ -440,11 +468,10 @@ export async function qualityCheck(input: {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(requestBody),
     })).json() as Record<string, unknown>;
-  const qc = parseEmbeddedJson<{ identityPreserved: boolean; hairTargetMatched: boolean; nonHairRegionPreserved: boolean; artifactFree: boolean; confidence: number }>(responseText(payload));
-  return qc.identityPreserved && qc.hairTargetMatched && qc.nonHairRegionPreserved && qc.artifactFree && qc.confidence >= 0.72;
+  return parseEmbeddedJson<QualityCheckResult>(responseText(payload));
 }
 
 export function safeErrorCode(error: unknown) {
   const value = error instanceof Error ? error.message : "unknown_error";
-  return ["invalid_api_key", "insufficient_credits", "rate_limited", "moderation_blocked", "analysis_schema_invalid", "analysis_slots_invalid", "analysis_style_invalid", "analysis_color_invalid", "analysis_output_missing", "image_output_missing", "image_upload_failed", "image_task_failed", "model_request_failed"].includes(value) ? value : "generation_failed";
+  return ["invalid_api_key", "insufficient_credits", "service_paused_low_credit", "service_temporarily_unavailable", "model_policy_error", "model_daily_limit", "analysis_call_limit", "image_call_limit_reached", "quality_call_limit", "quality_check_failed", "quality_service_failed", "rate_limited", "moderation_blocked", "analysis_schema_invalid", "analysis_slots_invalid", "analysis_style_invalid", "analysis_color_invalid", "analysis_output_missing", "image_output_missing", "image_upload_failed", "image_task_failed", "model_request_failed"].includes(value) ? value : "generation_failed";
 }

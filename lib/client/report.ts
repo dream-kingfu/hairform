@@ -1,9 +1,12 @@
-import { getColor } from "@/lib/hair/catalog";
-import { FACE_LABELS, FRINGE_LABELS, HAIRLINE_LABELS, PART_LABELS, SLOT_LABELS, STYLE_TRAIT_LABELS, TEXTURE_LABELS, UNDERTONE_LABELS, colorLabel, styleLabel } from "@/lib/hair/labels";
+import { FACE_LABELS, HAIRLINE_LABELS, STYLE_TRAIT_LABELS, TEXTURE_LABELS, UNDERTONE_LABELS } from "@/lib/hair/labels";
 import type { BilingualLabel, HairJobView } from "@/lib/hair/types";
 
 const WIDTH = 2160;
 const HEIGHT = 3840;
+const INK = "#171914";
+const PAPER = "#f3f0e7";
+const ACID = "#e6ff57";
+const MUTED = "#74786b";
 
 function loadImage(src: string) {
   return new Promise<HTMLImageElement>((resolve, reject) => {
@@ -15,37 +18,42 @@ function loadImage(src: string) {
 }
 
 function rounded(context: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number) {
-  context.beginPath();
-  context.roundRect(x, y, width, height, radius);
+  context.beginPath(); context.roundRect(x, y, width, height, radius);
 }
 
 function cover(context: CanvasRenderingContext2D, image: HTMLImageElement, x: number, y: number, width: number, height: number, radius = 36) {
   const scale = Math.max(width / image.naturalWidth, height / image.naturalHeight);
   const drawWidth = image.naturalWidth * scale;
   const drawHeight = image.naturalHeight * scale;
-  context.save();
-  rounded(context, x, y, width, height, radius);
-  context.clip();
+  context.save(); rounded(context, x, y, width, height, radius); context.clip();
   context.drawImage(image, x + (width - drawWidth) / 2, y + (height - drawHeight) / 2, drawWidth, drawHeight);
   context.restore();
 }
 
-function text(context: CanvasRenderingContext2D, value: string, x: number, y: number, size: number, color = "#171914", weight = 600) {
+function text(context: CanvasRenderingContext2D, value: string, x: number, y: number, size: number, color = INK, weight = 600) {
   context.fillStyle = color;
   context.font = `${weight} ${size}px "Noto Sans SC", "Microsoft YaHei", Arial, sans-serif`;
   context.fillText(value, x, y);
 }
 
-function bilingual(context: CanvasRenderingContext2D, value: BilingualLabel, x: number, y: number, size = 34) {
-  text(context, value.zh, x, y, size, "#171914", 700);
-  text(context, value.en.toUpperCase(), x, y + size + 18, Math.max(18, Math.round(size * 0.48)), "#74786b", 600);
+function wrapped(context: CanvasRenderingContext2D, value: string, x: number, y: number, maxWidth: number, size: number, lineHeight: number, maxLines = 3, color = INK, weight = 600) {
+  context.font = `${weight} ${size}px "Noto Sans SC", "Microsoft YaHei", Arial, sans-serif`;
+  context.fillStyle = color;
+  const chars = Array.from(value);
+  const lines: string[] = [];
+  let line = "";
+  for (const char of chars) {
+    if (line && context.measureText(line + char).width > maxWidth) { lines.push(line); line = char; }
+    else line += char;
+    if (lines.length === maxLines) break;
+  }
+  if (lines.length < maxLines && line) lines.push(line);
+  lines.slice(0, maxLines).forEach((item, index) => context.fillText(item, x, y + index * lineHeight));
 }
 
-function chip(context: CanvasRenderingContext2D, value: BilingualLabel, x: number, y: number, width: number) {
-  context.fillStyle = "#e6ff57";
-  rounded(context, x, y, width, 98, 49);
-  context.fill();
-  bilingual(context, value, x + 28, y + 38, 27);
+function bilingual(context: CanvasRenderingContext2D, value: BilingualLabel, x: number, y: number, size = 34) {
+  text(context, value.zh, x, y, size, INK, 750);
+  text(context, value.en.toUpperCase(), x, y + size + 18, Math.max(18, Math.round(size * 0.48)), MUTED, 600);
 }
 
 function toBlob(canvas: HTMLCanvasElement, type: string, quality?: number) {
@@ -53,90 +61,75 @@ function toBlob(canvas: HTMLCanvasElement, type: string, quality?: number) {
 }
 
 export async function composeHairReport(job: HairJobView) {
-  if (!job.analysis || !job.originalUrl) throw new Error("job_not_composable");
-  const canvas = document.createElement("canvas");
-  canvas.width = WIDTH;
-  canvas.height = HEIGHT;
-  const context = canvas.getContext("2d");
-  if (!context) throw new Error("canvas_unavailable");
-  const original = await loadImage(job.originalUrl);
-  const imageMap = new Map<string, HTMLImageElement>();
-  await Promise.all(job.assets.filter((asset) => asset.status === "ready" && asset.url).map(async (asset) => {
-    try { imageMap.set(asset.id, await loadImage(asset.url!)); } catch { imageMap.set(asset.id, original); }
-  }));
+  const selectedId = job.generationPolicy?.selectedAssetId;
+  const selectedAsset = job.assets.find((asset) => asset.id === selectedId && asset.status === "ready" && asset.url);
+  const selected = job.presentation?.hairstyles.find((style) => style.assetId === selectedId);
+  if (!job.analysis || !job.presentation || !job.originalUrl || !selectedAsset?.url || !selected) throw new Error("job_not_composable");
+  const [original, preview] = await Promise.all([loadImage(job.originalUrl), loadImage(selectedAsset.url)]);
+  const canvas = document.createElement("canvas"); canvas.width = WIDTH; canvas.height = HEIGHT;
+  const context = canvas.getContext("2d"); if (!context) throw new Error("canvas_unavailable");
+  context.fillStyle = PAPER; context.fillRect(0, 0, WIDTH, HEIGHT);
+  context.fillStyle = INK; context.fillRect(0, 0, WIDTH, 250);
+  text(context, "型格", 92, 112, 66, ACID, 800);
+  text(context, "HAIRFORM / SINGLE PREVIEW REPORT", 92, 176, 26, PAPER, 650);
+  text(context, "V0.3 · 24H PRIVATE", 1685, 145, 24, ACID, 700);
 
-  context.fillStyle = "#f3f0e7";
-  context.fillRect(0, 0, WIDTH, HEIGHT);
-  context.fillStyle = "#171914";
-  context.fillRect(0, 0, WIDTH, 250);
-  text(context, "型格", 92, 112, 66, "#e6ff57", 800);
-  text(context, "HAIRFORM / AI MEN'S HAIR REPORT", 92, 176, 26, "#f3f0e7", 600);
-  text(context, "01 / VISUAL ESTIMATE", 1625, 116, 25, "#a7ab9b", 600);
-  if (job.demoMode) text(context, "DEMO MODE", 1788, 176, 24, "#e6ff57", 700);
+  cover(context, original, 88, 330, 958, 1110, 42);
+  cover(context, preview, 1114, 330, 958, 1110, 42);
+  text(context, "原始肖像 / ORIGINAL", 88, 1490, 24, MUTED, 650);
+  text(context, `${selected.slotLabel.zh} / ${selected.slotLabel.en.toUpperCase()}`, 1114, 1490, 24, INK, 750);
 
-  cover(context, original, 88, 330, 660, 720, 44);
-  text(context, "原始肖像 / ORIGINAL", 88, 1108, 25, "#74786b", 600);
-  text(context, "你的视觉特征", 820, 400, 56, "#171914", 800);
-  text(context, "YOUR VISUAL PROFILE", 820, 448, 21, "#74786b", 600);
+  text(context, "视觉分析", 88, 1610, 52, INK, 800);
+  text(context, "VISUAL PROFILE", 88, 1655, 21, MUTED, 650);
   const tags: BilingualLabel[] = [
     FACE_LABELS[job.analysis.faceShape], TEXTURE_LABELS[job.analysis.hairTexture],
     HAIRLINE_LABELS[job.analysis.hairline], UNDERTONE_LABELS[job.analysis.skinUndertone],
     ...job.analysis.styleTraitIds.slice(0, 2).map((id) => STYLE_TRAIT_LABELS[id]),
   ];
-  tags.forEach((item, index) => chip(context, item, 820 + (index % 2) * 610, 520 + Math.floor(index / 2) * 142, 560));
-  text(context, "基于单张正面照片 · 结果仅供造型参考", 820, 1025, 24, "#74786b", 500);
-
-  text(context, "发型对比", 88, 1220, 54, "#171914", 800);
-  text(context, "HAIRSTYLE COMPARISON", 88, 1265, 21, "#74786b", 600);
-  const slots = ["best_short", "best_medium", "best_long", "less_suitable"] as const;
-  slots.forEach((slot, index) => {
-    const recommendation = job.analysis!.hairstyleSlots.find((item) => item.slot === slot)!;
-    const x = 88 + (index % 2) * 1002;
-    const y = 1325 + Math.floor(index / 2) * 640;
-    context.fillStyle = slot === "less_suitable" ? "#dedbd1" : "#ffffff";
-    rounded(context, x, y, 938, 590, 40);
-    context.fill();
-    cover(context, imageMap.get(slot) ?? original, x + 24, y + 24, 438, 542, 28);
-    bilingual(context, SLOT_LABELS[slot], x + 500, y + 86, 31);
-    bilingual(context, styleLabel(recommendation.styleId), x + 500, y + 190, 38);
-    bilingual(context, FRINGE_LABELS[recommendation.fringeId], x + 500, y + 330, 26);
-    bilingual(context, PART_LABELS[recommendation.partId], x + 500, y + 430, 26);
+  tags.forEach((tag, index) => {
+    const x = 88 + (index % 3) * 674; const y = 1710 + Math.floor(index / 3) * 130;
+    context.fillStyle = index < 4 ? ACID : "#dedbd1"; rounded(context, x, y, 626, 100, 18); context.fill();
+    bilingual(context, tag, x + 25, y + 38, 26);
   });
 
-  text(context, "发色辅助", 88, 2630, 54, "#171914", 800);
-  text(context, "HAIR COLOR SUPPORT", 88, 2675, 21, "#74786b", 600);
-  ["color_primary", "color_secondary"].forEach((id, index) => {
-    const color = job.analysis!.colors[index];
+  text(context, "所选发型", 88, 2050, 52, INK, 800);
+  text(context, "SELECTED STYLE", 88, 2095, 21, MUTED, 650);
+  context.fillStyle = "#fff"; rounded(context, 88, 2150, 1984, 330, 36); context.fill();
+  bilingual(context, selected.styleLabel, 142, 2230, 50);
+  bilingual(context, selected.lengthLabel, 880, 2225, 28);
+  bilingual(context, selected.fringeLabel, 1280, 2225, 28);
+  bilingual(context, selected.partLabel, 1650, 2225, 28);
+  if (selected.barberBrief) {
+    text(context, "给理发师这样说 / BARBER BRIEF", 142, 2370, 22, MUTED, 700);
+    wrapped(context, selected.barberBrief.spokenZh, 142, 2425, 1840, 28, 40, 2, INK, 650);
+  }
+
+  text(context, "其他建议", 88, 2605, 52, INK, 800);
+  text(context, "OTHER RECOMMENDATIONS", 88, 2650, 21, MUTED, 650);
+  job.presentation.hairstyles.forEach((style, index) => {
+    const x = 88 + (index % 2) * 1002; const y = 2705 + Math.floor(index / 2) * 230;
+    context.fillStyle = style.assetId === "less_suitable" ? "#dedbd1" : "#fff"; rounded(context, x, y, 938, 190, 28); context.fill();
+    bilingual(context, style.slotLabel, x + 28, y + 54, 25);
+    bilingual(context, style.styleLabel, x + 390, y + 54, 30);
+  });
+
+  text(context, "发色色卡", 88, 3260, 46, INK, 800);
+  text(context, "HAIR COLOR SWATCHES", 88, 3300, 19, MUTED, 650);
+  job.presentation.colors.forEach((color, index) => {
     const x = 88 + index * 1002;
-    const y = 2735;
-    context.fillStyle = "#ffffff";
-    rounded(context, x, y, 938, 540, 40);
-    context.fill();
-    cover(context, imageMap.get(id) ?? original, x + 24, y + 24, 430, 492, 28);
-    context.fillStyle = getColor(color.colorId).hex;
-    context.beginPath();
-    context.arc(x + 520, y + 102, 38, 0, Math.PI * 2);
-    context.fill();
-    bilingual(context, colorLabel(color.colorId), x + 580, y + 90, 36);
-    text(context, color.level ? `${color.level} 度 / LEVEL ${color.level}` : "自然明度 / NATURAL", x + 500, y + 230, 25, "#74786b", 600);
-    text(context, index === 0 ? "低调耐看" : "提亮气色", x + 500, y + 325, 31, "#171914", 700);
-    text(context, index === 0 ? "SUBTLE" : "BRIGHTENING", x + 500, y + 366, 19, "#74786b", 600);
+    context.fillStyle = "#fff"; rounded(context, x, 3340, 938, 210, 30); context.fill();
+    context.fillStyle = color.swatchHex; context.beginPath(); context.arc(x + 92, 3445, 52, 0, Math.PI * 2); context.fill();
+    bilingual(context, color.label, x + 180, 3418, 34);
+    bilingual(context, color.levelLabel, x + 610, 3418, 24);
   });
 
-  context.fillStyle = "#171914";
-  rounded(context, 88, 3360, 1984, 370, 44);
-  context.fill();
-  const best = job.analysis.hairstyleSlots.find((item) => item.slot === "best_short")!;
-  text(context, "OVERALL STYLE", 142, 3440, 23, "#e6ff57", 700);
-  text(context, "清爽结构感 · 轻盈纹理 · 自然分缝", 142, 3525, 48, "#f3f0e7", 800);
-  text(context, `${styleLabel(best.styleId).zh} / ${styleLabel(best.styleId).en}`, 142, 3602, 29, "#a7ab9b", 600);
-  text(context, "本报告为视觉建议，不构成医学、植发或专业理发结论。", 142, 3683, 21, "#74786b", 500);
-  text(context, "HAIRFORM · 24H PRIVATE RESULT", 1640, 3683, 19, "#74786b", 600);
+  context.fillStyle = INK; rounded(context, 88, 3610, 1984, 150, 30); context.fill();
+  text(context, job.presentation.overallStyle.zh, 132, 3680, 34, PAPER, 800);
+  text(context, job.presentation.overallStyle.en, 132, 3725, 18, "#a7ab9b", 600);
+  text(context, "单张正面照视觉建议 · 非医学或植发结论", 1480, 3725, 17, "#a7ab9b", 550);
 
   const png = await toBlob(canvas, "image/png");
-  const previewCanvas = document.createElement("canvas");
-  previewCanvas.width = 1080;
-  previewCanvas.height = 1920;
+  const previewCanvas = document.createElement("canvas"); previewCanvas.width = 1080; previewCanvas.height = 1920;
   previewCanvas.getContext("2d")?.drawImage(canvas, 0, 0, 1080, 1920);
   const webp = await toBlob(previewCanvas, "image/webp", 0.9);
   return { png, webp };

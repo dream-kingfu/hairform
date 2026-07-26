@@ -20,6 +20,12 @@ export const hairJobs = sqliteTable("hair_jobs", {
   expiresAt: integer("expires_at").notNull(),
   deletedAt: integer("deleted_at"),
   workLockUntil: integer("work_lock_until"),
+  generationPolicy: text("generation_policy").notNull().default("legacy-six-v1"),
+  selectedAssetId: text("selected_asset_id"),
+  analysisCalls: integer("analysis_calls").notNull().default(0),
+  imageCalls: integer("image_calls").notNull().default(0),
+  qcLunaCalls: integer("qc_luna_calls").notNull().default(0),
+  qcTerraCalls: integer("qc_terra_calls").notNull().default(0),
 }, (table) => [index("hair_jobs_expires_idx").on(table.expiresAt)]);
 
 export const rateLimitBuckets = sqliteTable("rate_limit_buckets", {
@@ -28,3 +34,10 @@ export const rateLimitBuckets = sqliteTable("rate_limit_buckets", {
   createdAt: integer("created_at").notNull(),
   expiresAt: integer("expires_at").notNull(),
 }, (table) => [index("rate_limit_buckets_expires_idx").on(table.expiresAt)]);
+
+export const serviceState = sqliteTable("service_state", {
+  key: text("state_key").primaryKey(),
+  value: text("state_value").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+  expiresAt: integer("expires_at").notNull(),
+});

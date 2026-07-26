@@ -14,7 +14,8 @@ const ACTIVE_STATUSES: JobStatus[] = ["validating", "analyzing", "generating", "
 const STATUS_STEPS: Array<{ status: JobStatus; zh: string; en: string }> = [
   { status: "validating", zh: "照片检查", en: "PHOTO CHECK" },
   { status: "analyzing", zh: "特征分析", en: "ANALYSIS" },
-  { status: "generating", zh: "生成预览", en: "6 PREVIEWS" },
+  { status: "awaiting_selection", zh: "选择发型", en: "CHOOSE" },
+  { status: "generating", zh: "生成预览", en: "1 PREVIEW" },
   { status: "compositing", zh: "报告排版", en: "COMPOSING" },
   { status: "completed", zh: "完成", en: "COMPLETE" },
 ];
@@ -33,6 +34,14 @@ const ERROR_MESSAGES: Record<string, string> = {
   insufficient_previews: "可用预览数量不足，请重新生成。",
   photo_quality_failed: "照片角度或遮挡不符合要求，请更换清晰正面照。",
   job_busy: "当前任务仍在处理中，请稍后再试。",
+  selection_locked: "这份报告已经选定发型，不能更换生成款。",
+  image_call_limit_reached: "两次生成额度已用完，请重新上传照片开始。",
+  service_paused_low_credit: "AI 服务正在维护额度，请稍后再试。",
+  service_temporarily_unavailable: "AI 服务繁忙，请稍后再试。",
+  model_policy_error: "AI 模型配置异常，请联系管理员。",
+  model_daily_limit: "今天的生成额度已用完，请明天再试。",
+  quality_check_failed: "预览未通过一致性检查，请重新上传照片。",
+  quality_service_failed: "预览质检服务暂时不可用，请稍后重新分析。",
 };
 
 function Bi({ value }: { value: BilingualLabel }) {
@@ -55,11 +64,11 @@ async function jsonRequest<T>(url: string, init?: RequestInit): Promise<T> {
 
 function statusRank(status: JobStatus, progress = 0) {
   if (status === "failed") return progress < 22 ? 1 : progress < 92 ? 2 : 3;
-  const rank: Record<JobStatus, number> = { validating: 0, analyzing: 1, generating: 2, compositing: 3, completed: 4, partial: 4, failed: 4, expired: 4, deleted: 4 };
+  const rank: Record<JobStatus, number> = { validating: 0, analyzing: 1, awaiting_selection: 2, generating: 3, compositing: 4, completed: 5, partial: 5, failed: 5, expired: 5, deleted: 5 };
   return rank[status];
 }
 
-function AssetCard({ asset, job, onRetry, onOpenBarberBrief }: { asset: JobAsset; job: HairJobView; onRetry: (id: AssetId) => void; onOpenBarberBrief: (id: HairSlot) => void }) {
+function AssetCard({ asset, job, busy, onGenerate, onRetry, onOpenBarberBrief }: { asset: JobAsset; job: HairJobView; busy?: boolean; onGenerate: (id: HairSlot) => void; onRetry: (id: AssetId) => void; onOpenBarberBrief: (id: HairSlot) => void }) {
   const recommendation = job.analysis?.hairstyleSlots.find((item) => item.slot === asset.id);
   const colorIndex = asset.id === "color_primary" ? 0 : 1;
   const color = asset.kind === "color" ? job.analysis?.colors[colorIndex] : undefined;
@@ -67,11 +76,13 @@ function AssetCard({ asset, job, onRetry, onOpenBarberBrief }: { asset: JobAsset
   return (
     <article className={`asset-card ${asset.kind === "color" ? "is-color" : ""} ${asset.id === "less_suitable" ? "is-caution" : ""}`}>
       <div className="asset-media">
-        {asset.status === "ready" && asset.url ? <img src={asset.url} alt={`${title.zh}真人预览`} /> : (
+        {asset.status === "ready" && asset.url ? <img src={asset.url} alt={`${title.zh}真人预览`} /> : asset.kind === "color" ? (
+          <div className="asset-placeholder color-only"><i style={{ background: color ? getColor(color.colorId).hex : "#30251f" }} /><p>发色色卡 · 不消耗图片生成</p></div>
+        ) : (
           <div className="asset-placeholder">
             <span className={asset.status === "failed" ? "failed-mark" : "loader-mark"}>{asset.status === "failed" ? "!" : "✦"}</span>
-            <p>{asset.status === "failed" ? "这张没有生成成功" : asset.status === "generating" ? "正在生成真人预览" : "等待生成"}</p>
-            {asset.status === "failed" && <button className="text-button" onClick={() => onRetry(asset.id)}>单独重试</button>}
+            <p>{asset.status === "failed" ? "预览未通过检查" : asset.status === "generating" ? "正在生成真人预览" : asset.id === "less_suitable" ? "谨慎选择 · 仅作文字参考" : "选择后生成真人预览"}</p>
+            {asset.status === "failed" && job.generationPolicy?.version === "legacy-six-v1" && <button className="text-button" onClick={() => onRetry(asset.id)}>单独重试</button>}
           </div>
         )}
         {asset.status === "ready" && <span className="media-badge">{asset.kind === "color" ? "COLOR" : asset.id === "less_suitable" ? "COMPARE" : "RECOMMENDED"}</span>}
@@ -82,6 +93,7 @@ function AssetCard({ asset, job, onRetry, onOpenBarberBrief }: { asset: JobAsset
           <Bi value={styleLabel(recommendation.styleId)} />
           <div className="mini-tags"><span>{FRINGE_LABELS[recommendation.fringeId].zh}</span><span>{PART_LABELS[recommendation.partId].zh}</span></div>
           {recommendation.slot !== "less_suitable" && asset.status === "ready" && asset.url && <button className="barber-brief-button" onClick={() => onOpenBarberBrief(recommendation.slot)}><span>给理发师看</span><small>BARBER BRIEF ↗</small></button>}
+          {recommendation.slot !== "less_suitable" && asset.status === "not_requested" && job.status === "awaiting_selection" && !job.generationPolicy?.selectedAssetId && <button className="primary-button choose-style-button" disabled={busy} onClick={() => onGenerate(recommendation.slot)}>{busy ? "正在提交…" : "生成这款 →"}</button>}
         </>}
         {color && <div className="color-line"><i style={{ background: getColor(color.colorId).hex }} /><span>{color.level ? `${color.level} 度` : "自然明度"}</span></div>}
       </div>
@@ -234,9 +246,12 @@ export function HairApp() {
 
   const blockingIssues = inspection?.issues.filter((issue) => issue.blocking) ?? [];
   const canStart = Boolean(file && inspection && blockingIssues.length === 0 && consent && !checking);
-  const resultReady = Boolean(job && ["completed", "partial"].includes(job.status));
+  const resultReady = Boolean(job && ["awaiting_selection", "completed", "partial"].includes(job.status));
   const recommendationAssets = job?.assets.filter((asset) => asset.kind === "hairstyle") ?? [];
   const colorAssets = job?.assets.filter((asset) => asset.kind === "color") ?? [];
+  const progressAssets = job?.generationPolicy?.selectedAssetId
+    ? job.assets.filter((asset) => asset.id === job.generationPolicy?.selectedAssetId)
+    : [];
   const selectedBriefAsset = selectedBriefSlot ? recommendationAssets.find((asset) => asset.id === selectedBriefSlot && asset.status === "ready" && asset.url) : undefined;
   const selectedRecommendation = selectedBriefSlot ? job?.analysis?.hairstyleSlots.find((item) => item.slot === selectedBriefSlot) : undefined;
   const selectedBrief = job?.analysis && selectedRecommendation ? buildBarberBrief(job.analysis, selectedRecommendation, {
@@ -302,9 +317,37 @@ export function HairApp() {
     finally { setBusyAsset(undefined); }
   }
 
+  async function generateAsset(id: HairSlot) {
+    if (!job || id === "less_suitable" || busyAsset || job.status !== "awaiting_selection") return;
+    const recommendation = job.analysis?.hairstyleSlots.find((item) => item.slot === id);
+    setBusyAsset(id); setError(undefined); composingJob.current = null;
+    if (recommendation) setSelectedStyleId(recommendation.styleId);
+    setJob({
+      ...job,
+      status: "generating",
+      progress: 42,
+      generationPolicy: job.generationPolicy ? { ...job.generationPolicy, selectedAssetId: id } : undefined,
+      assets: job.assets.map((asset) => asset.id === id ? { ...asset, status: "generating" } : asset),
+    });
+    try {
+      const current = await jsonRequest<HairJobView>(`/api/v1/hair-jobs/${job.id}/generate`, {
+        method: "POST",
+        headers: authHeaders(accessToken.current, true),
+        body: JSON.stringify({ assetId: id }),
+      });
+      setJob(current);
+    } catch (generationError) {
+      const code = generationError instanceof Error ? generationError.message : "processing_failed";
+      setError(ERROR_MESSAGES[code] || ERROR_MESSAGES.processing_failed);
+      await refreshJob(job.id).catch(() => undefined);
+    } finally { setBusyAsset(undefined); }
+  }
+
   async function submitFeedback(helpful: boolean) {
     if (!job || feedback !== undefined) return;
-    await jsonRequest(`/api/v1/hair-jobs/${job.id}/feedback`, { method: "POST", headers: authHeaders(accessToken.current, true), body: JSON.stringify({ helpful, selectedStyleId }) });
+    const selectedSlot = job.generationPolicy?.selectedAssetId;
+    const effectiveStyleId = selectedStyleId || job.analysis?.hairstyleSlots.find((item) => item.slot === selectedSlot)?.styleId;
+    await jsonRequest(`/api/v1/hair-jobs/${job.id}/feedback`, { method: "POST", headers: authHeaders(accessToken.current, true), body: JSON.stringify({ helpful, selectedStyleId: effectiveStyleId }) });
     setFeedback(helpful);
   }
 
@@ -422,7 +465,7 @@ export function HairApp() {
     <main className="site-shell">
       <header className="topbar">
         <a className="brand" href="#top" aria-label="型格首页"><span>型格</span><small>HAIRFORM</small></a>
-        <div className="topbar-meta"><span>V0.2 · AI MEN&apos;S HAIR</span><span className="privacy-dot" />24H PRIVATE</div>
+        <div className="topbar-meta"><span>V0.3 · AI MEN&apos;S HAIR</span><span className="privacy-dot" />24H PRIVATE</div>
       </header>
 
       {!job && <>
@@ -430,8 +473,8 @@ export function HairApp() {
           <div className="hero-copy">
             <p className="eyebrow">AI MEN&apos;S HAIR REPORT / 01</p>
             <h1>先看见，<br />再决定<span>剪什么。</span></h1>
-            <p className="hero-lead">一张正面照，获得短发、中发、长发与发色真人对比。不是滤镜，是走进理发店前的第二意见。</p>
-            <div className="hero-stats"><span><strong>4</strong> 款发型</span><span><strong>2</strong> 款发色</span><span><strong>24H</strong> 自动删除</span></div>
+            <p className="hero-lead">一张正面照，先获得三款发型建议，再选择一款生成真人预览。不是滤镜，是走进理发店前的第二意见。</p>
+            <div className="hero-stats"><span><strong>3</strong> 款推荐</span><span><strong>1</strong> 张预览</span><span><strong>24H</strong> 自动删除</span></div>
           </div>
           <div className="hero-mark" aria-hidden="true"><span>01</span><b>LOOK<br />FIRST</b><i /></div>
         </section>
@@ -461,12 +504,10 @@ export function HairApp() {
       </>}
 
       {job && !resultReady && <section className="progress-page">
-        <div className="progress-heading"><p className="eyebrow">ANALYSIS IN PROGRESS</p><h1>正在为你生成<br />六张真人预览<span>。</span></h1>{job.demoMode && <p className="demo-notice">演示模式：当前未配置 AI 服务密钥，流程和报告可完整体验，预览暂用原图占位。</p>}</div>
+        <div className="progress-heading"><p className="eyebrow">ANALYSIS IN PROGRESS</p><h1>{job.status === "generating" ? <>正在生成你选的<br />一张真人预览<span>。</span></> : <>正在分析你的<br />发型适配<span>。</span></>}</h1>{job.demoMode && <p className="demo-notice">演示模式：当前未配置 AI 服务密钥，预览暂用原图占位。</p>}</div>
         <div className="progress-meter"><div style={{ width: `${job.progress}%` }} /><strong>{job.progress}%</strong></div>
         <ol className="status-steps">{STATUS_STEPS.map((step, index) => { const current = statusRank(job.status, job.progress); return <li className={index < current ? "done" : index === current ? "active" : ""} key={step.status}><span>{String(index + 1).padStart(2, "0")}</span><b>{step.zh}</b><small>{step.en}</small></li>; })}</ol>
-        <div className="generating-grid">{(job.assets.length ? job.assets : [
-          { id: "best_short", kind: "hairstyle", status: "pending" }, { id: "best_medium", kind: "hairstyle", status: "pending" }, { id: "best_long", kind: "hairstyle", status: "pending" }, { id: "less_suitable", kind: "hairstyle", status: "pending" }, { id: "color_primary", kind: "color", status: "pending" }, { id: "color_secondary", kind: "color", status: "pending" },
-        ] as JobAsset[]).map((asset) => <div className={`generating-tile ${asset.status}`} key={asset.id}><span>✦</span><b>{asset.id.replaceAll("_", " ")}</b><small>{asset.status === "ready" ? "READY" : asset.status === "failed" ? "RETRY AVAILABLE" : "GENERATING"}</small></div>)}</div>
+        <div className="generating-grid single-preview-grid">{progressAssets.length ? progressAssets.map((asset) => <div className={`generating-tile ${asset.status}`} key={asset.id}><span>✦</span><b>{asset.id.replaceAll("_", " ")}</b><small>{asset.status === "ready" ? "READY" : asset.status === "failed" ? "NOT PASSED" : "GENERATING"}</small></div>) : <div className="generating-tile analyzing"><span>✦</span><b>VISUAL ANALYSIS</b><small>CHECKING FEATURES</small></div>}</div>
         {job.status === "failed" && <><p className="error-banner" role="alert">{ERROR_MESSAGES[job.errorCode ?? ""] || ERROR_MESSAGES.processing_failed}</p><button className="secondary-button" onClick={() => { localStorage.removeItem("hairform:lastJob"); accessToken.current = undefined; setJob(undefined); }}>重新开始</button></>}
         {error && !(job.status === "failed" && job.errorCode) && <p className="error-banner" role="alert">{error}</p>}
       </section>}
@@ -477,14 +518,14 @@ export function HairApp() {
         <div className="analysis-strip">
           <Bi value={FACE_LABELS[job.analysis.faceShape]} /><Bi value={TEXTURE_LABELS[job.analysis.hairTexture]} /><Bi value={DENSITY_LABELS[job.analysis.hairDensity]} /><Bi value={HAIRLINE_LABELS[job.analysis.hairline]} /><Bi value={FOREHEAD_LABELS[job.analysis.foreheadRatio]} /><Bi value={UNDERTONE_LABELS[job.analysis.skinUndertone]} />
         </div>
-        <div className="result-section-heading"><p className="eyebrow">01 / HAIRSTYLES</p><h2>三种长度，一个避雷对照</h2></div>
+        <div className="result-section-heading"><p className="eyebrow">01 / HAIRSTYLES</p><h2>{job.status === "awaiting_selection" ? "选择一款，生成真人预览" : "你的单款真人预览与发型建议"}</h2></div>
         <div className="barber-intro"><div><p className="eyebrow">NEW / BARBER BRIEF</p><h3>选中一款，带着明确参数去理发店。</h3></div><p>推荐卡片可生成独立沟通卡：先给一句能直接说的话，再列长度、层次、打薄和避坑参数。</p></div>
-        <div className="asset-grid">{recommendationAssets.map((asset) => <AssetCard asset={asset} job={job} key={asset.id} onRetry={retryAsset} onOpenBarberBrief={openBarberBrief} />)}</div>
+        <div className="asset-grid">{recommendationAssets.map((asset) => <AssetCard asset={asset} job={job} busy={busyAsset === asset.id} key={asset.id} onGenerate={generateAsset} onRetry={retryAsset} onOpenBarberBrief={openBarberBrief} />)}</div>
         <div className="result-section-heading"><p className="eyebrow">02 / COLORS</p><h2>发色只做辅助，不抢五官</h2></div>
-        <div className="asset-grid color-grid">{colorAssets.map((asset) => <AssetCard asset={asset} job={job} key={asset.id} onRetry={retryAsset} onOpenBarberBrief={openBarberBrief} />)}</div>
+        <div className="asset-grid color-grid">{colorAssets.map((asset) => <AssetCard asset={asset} job={job} busy={false} key={asset.id} onGenerate={generateAsset} onRetry={retryAsset} onOpenBarberBrief={openBarberBrief} />)}</div>
         <div className="overall-card"><p className="eyebrow">OVERALL STYLE</p><h2>{job.analysis.styleTraitIds.map((id) => STYLE_TRAIT_LABELS[id]?.zh).filter(Boolean).join(" · ")}</h2><p>{styleLabel(job.analysis.hairstyleSlots[0].styleId).zh}优先，保留轻盈纹理与自然分缝。</p></div>
         {job.previewUrl && <div className="report-preview"><img src={job.previewUrl} alt="双语发型分析报告预览" /><div><p className="eyebrow">READY TO SAVE</p><h2>你的双语报告已排好</h2><p>2160 × 3840 PNG，适合保存到相册或直接发给发型师。</p><div className="report-actions"><button className="primary-button" onClick={downloadReport}>下载高清报告 ↓</button><button className="secondary-button" onClick={shareReport}>分享结果 ↗</button></div></div></div>}
-        <div className="feedback-row"><div><p className="eyebrow">FEEDBACK</p><h3>这个结果对你有帮助吗？</h3></div><div><button disabled={feedback !== undefined} className={feedback === true ? "selected" : ""} onClick={() => void submitFeedback(true)}>有帮助</button><button disabled={feedback !== undefined} className={feedback === false ? "selected" : ""} onClick={() => void submitFeedback(false)}>没帮助</button></div></div>
+        {["completed", "partial"].includes(job.status) && <div className="feedback-row"><div><p className="eyebrow">FEEDBACK</p><h3>这个结果对你有帮助吗？</h3></div><div><button disabled={feedback !== undefined} className={feedback === true ? "selected" : ""} onClick={() => void submitFeedback(true)}>有帮助</button><button disabled={feedback !== undefined} className={feedback === false ? "selected" : ""} onClick={() => void submitFeedback(false)}>没帮助</button></div></div>}
         {job.status === "partial" && <p className="error-banner">部分预览没有成功，你可以在对应卡片中单独重试。</p>}
         {error && <p className="error-banner" role="alert">{error}</p>}
         <div className="result-footer"><span>结果将在 {new Date(job.expiresAt).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })} 自动删除</span><button className="danger-button" onClick={deleteCurrentJob}>立即删除全部数据</button></div>

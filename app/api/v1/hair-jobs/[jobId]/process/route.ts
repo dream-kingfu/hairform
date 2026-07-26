@@ -1,6 +1,6 @@
 import { authorizeJob, claimInitialJob, failJobWork, getJob, toJobView } from "@/lib/server/jobs";
 import { safeErrorCode } from "@/lib/server/openai";
-import { processJob } from "@/lib/server/processor";
+import { analyzeJob, processLegacyJob } from "@/lib/server/processor";
 
 export const dynamic = "force-dynamic";
 type Context = { params: Promise<{ jobId: string }> };
@@ -20,7 +20,7 @@ export async function POST(request: Request, context: Context) {
     return current ? Response.json(toJobView(current), { status: 202 }) : Response.json({ error: "job_not_found" }, { status: 404 });
   }
   try {
-    const processed = await processJob(claimed);
+    const processed = claimed.generation_policy === "single-preview-v1" ? await analyzeJob(claimed) : await processLegacyJob(claimed);
     return Response.json(processed ? toJobView(processed) : { error: "job_not_found" });
   } catch (error) {
     const errorCode = safeErrorCode(error);

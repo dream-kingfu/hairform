@@ -34,25 +34,32 @@ test("keeps model output separate from deterministic labels", async () => {
 });
 
 test("enforces public generation budgets without storing raw IP addresses", async () => {
-  const [rateLimit, createRoute, retryRoute, processRoute, schema, migration] = await Promise.all([
+  const [rateLimit, createRoute, retryRoute, processRoute, generateRoute, processor, schema, migration] = await Promise.all([
     readFile(new URL("../lib/server/rate-limit.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/v1/hair-jobs/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/v1/hair-jobs/[jobId]/retry/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/v1/hair-jobs/[jobId]/process/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/v1/hair-jobs/[jobId]/generate/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/server/processor.ts", import.meta.url), "utf8"),
     readFile(new URL("../db/schema.ts", import.meta.url), "utf8"),
-    readFile(new URL("../drizzle/0002_spicy_aqueduct.sql", import.meta.url), "utf8"),
+    readFile(new URL("../drizzle/0003_single_preview_policy.sql", import.meta.url), "utf8"),
   ]);
   assert.match(rateLimit, /MAX_JOBS_PER_HOUR, 2/);
   assert.match(rateLimit, /MAX_JOBS_PER_DAY, 5/);
   assert.match(rateLimit, /MAX_RETRIES_PER_HOUR, 6/);
-  assert.match(rateLimit, /MAX_GENERATION_UNITS_PER_DAY, 600/);
+  assert.match(rateLimit, /MAX_GLOBAL_JOBS_PER_DAY, 100/);
+  assert.match(rateLimit, /MAX_IMAGE_CALLS_PER_DAY/);
   assert.match(rateLimit, /crypto\.subtle\.digest\("SHA-256"/);
   assert.match(rateLimit, /Retry-After/);
   assert.match(createRoute, /consumeNewJobLimit/);
   assert.match(retryRoute, /consumeRetryLimit/);
   assert.match(processRoute, /claimInitialJob/);
+  assert.match(generateRoute, /model_not_allowed/);
+  assert.match(generateRoute, /selection_locked/);
+  assert.match(processor, /MODEL_POLICY\.imageEdit\.perJobLimit/);
   assert.match(schema, /rate_limit_buckets/);
-  assert.match(migration, /work_lock_until/);
+  assert.match(schema, /service_state/);
+  assert.match(migration, /image_calls/);
 });
 
 test("ships a deterministic, downloadable barber brief without changing the main report", async () => {

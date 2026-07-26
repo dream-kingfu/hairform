@@ -20,6 +20,7 @@ export type AssetId = HairSlot | "color_primary" | "color_secondary";
 export type JobStatus =
   | "validating"
   | "analyzing"
+  | "awaiting_selection"
   | "generating"
   | "compositing"
   | "completed"
@@ -60,7 +61,7 @@ export interface HairAnalysis {
 export interface JobAsset {
   id: AssetId;
   kind: "hairstyle" | "color";
-  status: "pending" | "generating" | "ready" | "failed";
+  status: "not_requested" | "pending" | "generating" | "ready" | "failed";
   url?: string;
   errorCode?: string;
 }
@@ -78,6 +79,13 @@ export interface HairJobView {
   demoMode: boolean;
   errorCode?: string;
   presentation?: HairJobPresentation;
+  generationPolicy?: {
+    version: "single-preview-v1" | "legacy-six-v1";
+    selectableAssetIds: Array<"best_short" | "best_medium" | "best_long">;
+    selectedAssetId?: "best_short" | "best_medium" | "best_long";
+    imageCallsUsed: number;
+    imageCallsLimit: number;
+  };
 }
 
 export interface BilingualLabel {

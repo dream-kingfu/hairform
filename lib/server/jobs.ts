@@ -11,6 +11,7 @@ interface RuntimeBindings {
   KIE_API_BASE?: string;
   KIE_UPLOAD_BASE?: string;
   KIE_ANALYSIS_MODEL?: string;
+  KIE_QC_MODEL?: string;
   KIE_IMAGE_MODEL?: string;
   ANALYSIS_MODEL?: string;
   IMAGE_MODEL?: string;
@@ -20,6 +21,12 @@ interface RuntimeBindings {
   MAX_JOBS_PER_DAY?: string;
   MAX_RETRIES_PER_HOUR?: string;
   MAX_GENERATION_UNITS_PER_DAY?: string;
+  MAX_GLOBAL_JOBS_PER_DAY?: string;
+  MAX_IMAGE_CALLS_PER_DAY?: string;
+  MAX_ANALYSIS_CALLS_PER_DAY?: string;
+  MAX_QC_CALLS_PER_DAY?: string;
+  MAX_QC_ESCALATIONS_PER_DAY?: string;
+  KIE_MIN_CREDITS?: string;
   GENERATION_CONCURRENCY?: string;
 }
 
@@ -41,6 +48,12 @@ export interface StoredJob {
   expires_at: number;
   deleted_at: number | null;
   work_lock_until: number | null;
+  generation_policy: string | null;
+  selected_asset_id: string | null;
+  analysis_calls: number;
+  image_calls: number;
+  qc_luna_calls: number;
+  qc_terra_calls: number;
 }
 
 export const bindings = env as unknown as RuntimeBindings;
@@ -48,13 +61,15 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 let schemaReady = false;
 
 export const DEFAULT_ASSETS: JobAsset[] = [
-  { id: "best_short", kind: "hairstyle", status: "pending" },
-  { id: "best_medium", kind: "hairstyle", status: "pending" },
-  { id: "best_long", kind: "hairstyle", status: "pending" },
-  { id: "less_suitable", kind: "hairstyle", status: "pending" },
-  { id: "color_primary", kind: "color", status: "pending" },
-  { id: "color_secondary", kind: "color", status: "pending" },
+  { id: "best_short", kind: "hairstyle", status: "not_requested" },
+  { id: "best_medium", kind: "hairstyle", status: "not_requested" },
+  { id: "best_long", kind: "hairstyle", status: "not_requested" },
+  { id: "less_suitable", kind: "hairstyle", status: "not_requested" },
+  { id: "color_primary", kind: "color", status: "not_requested" },
+  { id: "color_secondary", kind: "color", status: "not_requested" },
 ];
+
+export const LEGACY_ASSETS: JobAsset[] = DEFAULT_ASSETS.map((asset) => ({ ...asset, status: "pending" }));
 
 export async function ensureSchema() {
   if (schemaReady) return;
@@ -79,7 +94,13 @@ export async function ensureSchema() {
       updated_at INTEGER NOT NULL,
       expires_at INTEGER NOT NULL,
       deleted_at INTEGER,
-      work_lock_until INTEGER
+      work_lock_until INTEGER,
+      generation_policy TEXT NOT NULL DEFAULT 'legacy-six-v1',
+      selected_asset_id TEXT,
+      analysis_calls INTEGER NOT NULL DEFAULT 0,
+      image_calls INTEGER NOT NULL DEFAULT 0,
+      qc_luna_calls INTEGER NOT NULL DEFAULT 0,
+      qc_terra_calls INTEGER NOT NULL DEFAULT 0
     )`),
     bindings.DB.prepare("CREATE INDEX IF NOT EXISTS hair_jobs_expires_idx ON hair_jobs (expires_at)"),
     bindings.DB.prepare(`CREATE TABLE IF NOT EXISTS rate_limit_buckets (
@@ -89,10 +110,25 @@ export async function ensureSchema() {
       expires_at INTEGER NOT NULL
     )`),
     bindings.DB.prepare("CREATE INDEX IF NOT EXISTS rate_limit_buckets_expires_idx ON rate_limit_buckets (expires_at)"),
+    bindings.DB.prepare(`CREATE TABLE IF NOT EXISTS service_state (
+      state_key TEXT PRIMARY KEY,
+      state_value TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL
+    )`),
   ]);
   const columns = await bindings.DB.prepare("PRAGMA table_info(hair_jobs)").all<{ name: string }>();
-  if (!columns.results.some((column) => column.name === "work_lock_until")) {
-    await bindings.DB.prepare("ALTER TABLE hair_jobs ADD COLUMN work_lock_until INTEGER").run();
+  const additions = [
+    ["work_lock_until", "ALTER TABLE hair_jobs ADD COLUMN work_lock_until INTEGER"],
+    ["generation_policy", "ALTER TABLE hair_jobs ADD COLUMN generation_policy TEXT NOT NULL DEFAULT 'legacy-six-v1'"],
+    ["selected_asset_id", "ALTER TABLE hair_jobs ADD COLUMN selected_asset_id TEXT"],
+    ["analysis_calls", "ALTER TABLE hair_jobs ADD COLUMN analysis_calls INTEGER NOT NULL DEFAULT 0"],
+    ["image_calls", "ALTER TABLE hair_jobs ADD COLUMN image_calls INTEGER NOT NULL DEFAULT 0"],
+    ["qc_luna_calls", "ALTER TABLE hair_jobs ADD COLUMN qc_luna_calls INTEGER NOT NULL DEFAULT 0"],
+    ["qc_terra_calls", "ALTER TABLE hair_jobs ADD COLUMN qc_terra_calls INTEGER NOT NULL DEFAULT 0"],
+  ] as const;
+  for (const [name, sql] of additions) {
+    if (!columns.results.some((column) => column.name === name)) await bindings.DB.prepare(sql).run();
   }
   schemaReady = true;
 }
@@ -110,9 +146,7 @@ export async function hashToken(token: string) {
 }
 
 export function isDemoMode() {
-  if (bindings.DEMO_MODE === "true") return true;
-  const provider = bindings.AI_PROVIDER?.trim().toLowerCase() || (bindings.KIE_API_KEY ? "kie" : "openai");
-  return provider === "kie" ? !bindings.KIE_API_KEY : !bindings.OPENAI_API_KEY;
+  return bindings.DEMO_MODE === "true";
 }
 
 export function jobCookieName(jobId: string) {
@@ -161,8 +195,8 @@ export async function insertJob(input: {
   const expiresAt = now + DAY_MS;
   await bindings.DB.prepare(`INSERT INTO hair_jobs (
     id, token_hash, status, progress, original_key, mask_key, assets_json,
-    demo_mode, created_at, updated_at, expires_at
-  ) VALUES (?, ?, 'validating', 4, ?, ?, ?, ?, ?, ?, ?)`)
+    demo_mode, generation_policy, created_at, updated_at, expires_at
+  ) VALUES (?, ?, 'validating', 4, ?, ?, ?, ?, 'single-preview-v1', ?, ?, ?)`)
     .bind(input.id, input.tokenHash, input.originalKey, input.maskKey ?? null, JSON.stringify(DEFAULT_ASSETS), input.demoMode ? 1 : 0, now, now, expiresAt)
     .run();
   return { expiresAt };
@@ -224,6 +258,37 @@ export async function claimRetryJob(jobId: string) {
     .first<StoredJob>();
 }
 
+export async function claimGenerationJob(jobId: string, assetId: "best_short" | "best_medium" | "best_long") {
+  await ensureSchema();
+  const now = Date.now();
+  return bindings.DB.prepare(`UPDATE hair_jobs SET
+    status = 'generating', progress = 42, selected_asset_id = ?, work_lock_until = ?, updated_at = ?
+    WHERE id = ? AND generation_policy = 'single-preview-v1'
+      AND status = 'awaiting_selection' AND selected_asset_id IS NULL
+      AND (work_lock_until IS NULL OR work_lock_until <= ?)
+    RETURNING *`)
+    .bind(assetId, now + WORK_LOCK_MS, now, jobId, now)
+    .first<StoredJob>();
+}
+
+type JobCallKind = "analysis" | "image" | "quality" | "quality_escalation";
+const CALL_COLUMNS: Record<JobCallKind, string> = {
+  analysis: "analysis_calls",
+  image: "image_calls",
+  quality: "qc_luna_calls",
+  quality_escalation: "qc_terra_calls",
+};
+
+export async function reserveJobCall(jobId: string, kind: JobCallKind, limit: number) {
+  await ensureSchema();
+  const column = CALL_COLUMNS[kind];
+  const row = await bindings.DB.prepare(`UPDATE hair_jobs SET ${column} = ${column} + 1, updated_at = ?
+    WHERE id = ? AND ${column} < ? RETURNING ${column} AS count`)
+    .bind(Date.now(), jobId, limit)
+    .first<{ count: number }>();
+  return row?.count;
+}
+
 export async function failJobWork(jobId: string, errorCode: string) {
   await ensureSchema();
   await bindings.DB.prepare(`UPDATE hair_jobs SET
@@ -240,7 +305,8 @@ export async function saveFeedback(jobId: string, helpful: boolean, selectedStyl
 }
 
 export function parseAssets(job: StoredJob): JobAsset[] {
-  try { return JSON.parse(job.assets_json) as JobAsset[]; } catch { return DEFAULT_ASSETS; }
+  try { return JSON.parse(job.assets_json) as JobAsset[]; }
+  catch { return job.generation_policy === "single-preview-v1" ? DEFAULT_ASSETS : LEGACY_ASSETS; }
 }
 
 export function toJobView(job: StoredJob): HairJobView {
@@ -262,6 +328,15 @@ export function toJobView(job: StoredJob): HairJobView {
     demoMode: Boolean(job.demo_mode),
     errorCode: job.error_code ?? undefined,
     presentation: analysis ? buildHairPresentation(analysis) : undefined,
+    generationPolicy: {
+      version: job.generation_policy === "single-preview-v1" ? "single-preview-v1" : "legacy-six-v1",
+      selectableAssetIds: ["best_short", "best_medium", "best_long"],
+      selectedAssetId: ["best_short", "best_medium", "best_long"].includes(job.selected_asset_id ?? "")
+        ? job.selected_asset_id as "best_short" | "best_medium" | "best_long"
+        : undefined,
+      imageCallsUsed: job.image_calls ?? 0,
+      imageCallsLimit: job.generation_policy === "single-preview-v1" ? 2 : 12,
+    },
   };
 }
 
@@ -301,6 +376,9 @@ export async function cleanupExpiredJobs() {
     .all<StoredJob>();
   for (const job of result.results) await expireJob(job);
   await bindings.DB.prepare("DELETE FROM rate_limit_buckets WHERE expires_at <= ?")
+    .bind(Date.now())
+    .run();
+  await bindings.DB.prepare("DELETE FROM service_state WHERE expires_at <= ?")
     .bind(Date.now())
     .run();
 }
