@@ -128,7 +128,16 @@ async function kieRequest(url: string, init: RequestInit, timeout = 150_000) {
   });
   if (!response.ok) {
     const body = await response.text();
-    const code = response.status === 429 ? "rate_limited" : body.toLowerCase().includes("moderation") ? "moderation_blocked" : "model_request_failed";
+    const code = response.status === 401
+      ? "invalid_api_key"
+      : response.status === 402
+        ? "insufficient_credits"
+        : response.status === 429
+          ? "rate_limited"
+          : body.toLowerCase().includes("moderation")
+            ? "moderation_blocked"
+            : "model_request_failed";
+    console.error("Kie request failed", { endpoint: new URL(url).pathname, status: response.status, code });
     throw new Error(code);
   }
   return response;
@@ -183,6 +192,14 @@ async function kieResponsesRequest(body: Record<string, unknown>) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ...body, stream: false }),
   });
+}
+
+function responsesBody(input: Array<Record<string, unknown>>, name: string, schema: Record<string, unknown>) {
+  const body: Record<string, unknown> = { model: ANALYSIS_MODEL(), input };
+  // Kie Terra accepts multimodal Responses input, but its documented contract
+  // does not include OpenAI's text.format/json_schema option.
+  if (!isKie()) body.text = { format: { type: "json_schema", name, strict: true, schema } };
+  return body;
 }
 
 function parseEmbeddedJson<T>(value: string): T {
@@ -305,13 +322,13 @@ function normalizeAnalysis(value: HairAnalysis): HairAnalysis {
 export async function analyzePortrait(image: ArrayBuffer, contentType: string) {
   if (isDemoMode()) return demoAnalysis();
   const catalog = HAIRSTYLE_CATALOG.map(({ id, length, fringeId, partId, textures, densities, faceShapes }) => ({ id, length, fringeId, partId, textures, densities, faceShapes }));
-  const prompt = `Analyze this single front-facing male portrait for hairstyle recommendation. Return only the requested structured data. First check photo suitability and add only these warning ids when present: side_angle, hat, hairline_occluded, multiple_faces, no_face, too_dark, face_too_small. Add single_front_photo_estimate for an otherwise usable photo. Treat hair density, hairline, forehead and undertone as visual estimates; use unknown whenever the photo does not support a reliable judgment. Select exactly one catalog style for each slot: best short, best medium, best long, and one less suitable comparison. Select two conservative hair colors. Do not infer identity, ethnicity, health, personality, attractiveness, or age. Catalog: ${JSON.stringify(catalog)}.`;
+  const prompt = `Analyze this single front-facing male portrait for hairstyle recommendation. Return exactly one valid JSON object matching the requested structure, with no Markdown or commentary. First check photo suitability and add only these warning ids when present: side_angle, hat, hairline_occluded, multiple_faces, no_face, too_dark, face_too_small. Add single_front_photo_estimate for an otherwise usable photo. Treat hair density, hairline, forehead and undertone as visual estimates; use unknown whenever the photo does not support a reliable judgment. Select exactly one catalog style for each slot: best short, best medium, best long, and one less suitable comparison. Select two conservative hair colors. Do not infer identity, ethnicity, health, personality, attractiveness, or age. Catalog: ${JSON.stringify(catalog)}.`;
   const imageUrl = isKie() ? await uploadKieImage(image, contentType) : dataUrl(image, contentType);
-  const requestBody = {
-      model: ANALYSIS_MODEL(),
-      input: [{ role: "user", content: [{ type: "input_text", text: prompt }, { type: "input_image", image_url: imageUrl }] }],
-      text: { format: { type: "json_schema", name: "hair_analysis", strict: true, schema: analysisSchema } },
-  };
+  const requestBody = responsesBody(
+    [{ role: "user", content: [{ type: "input_text", text: prompt }, { type: "input_image", image_url: imageUrl }] }],
+    "hair_analysis",
+    analysisSchema,
+  );
   const payload = isKie()
     ? await kieResponsesRequest(requestBody)
     : await (await openAIRequest("/responses", {
@@ -390,15 +407,15 @@ export async function qualityCheck(input: {
   const target = style ? `${style.styleId}, fringe ${style.fringeId}, part ${style.partId}` : `hair color ${color?.colorId}, unchanged hairstyle`;
   const originalUrl = isKie() ? await uploadKieImage(input.original, input.originalType) : dataUrl(input.original, input.originalType);
   const outputUrl = isKie() ? await uploadKieImage(input.output, input.outputType) : dataUrl(input.output, input.outputType);
-  const requestBody = {
-      model: ANALYSIS_MODEL(),
-      input: [{ role: "user", content: [
+  const requestBody = responsesBody(
+    [{ role: "user", content: [
         { type: "input_text", text: `Compare the original portrait and edited result. Target: ${target}. Check only same-person visual consistency, preservation of non-hair regions, target hair match, and obvious rendering artifacts. This is not identity recognition.` },
         { type: "input_image", image_url: originalUrl },
         { type: "input_image", image_url: outputUrl },
       ] }],
-      text: { format: { type: "json_schema", name: "hair_preview_qc", strict: true, schema: qcSchema } },
-  };
+    "hair_preview_qc",
+    qcSchema,
+  );
   const payload = isKie()
     ? await kieResponsesRequest(requestBody)
     : await (await openAIRequest("/responses", {
@@ -412,5 +429,5 @@ export async function qualityCheck(input: {
 
 export function safeErrorCode(error: unknown) {
   const value = error instanceof Error ? error.message : "unknown_error";
-  return ["rate_limited", "moderation_blocked", "analysis_schema_invalid", "analysis_slots_invalid", "analysis_style_invalid", "analysis_color_invalid", "analysis_output_missing", "image_output_missing", "image_upload_failed", "image_task_failed", "model_request_failed"].includes(value) ? value : "generation_failed";
+  return ["invalid_api_key", "insufficient_credits", "rate_limited", "moderation_blocked", "analysis_schema_invalid", "analysis_slots_invalid", "analysis_style_invalid", "analysis_color_invalid", "analysis_output_missing", "image_output_missing", "image_upload_failed", "image_task_failed", "model_request_failed"].includes(value) ? value : "generation_failed";
 }

@@ -24,6 +24,10 @@ const ERROR_MESSAGES: Record<string, string> = {
   file_too_large: "图片不能超过 15MB。",
   create_job_failed: "创建任务失败，请稍后重试。",
   processing_failed: "AI 服务暂时不可用，请稍后重试。",
+  invalid_api_key: "AI 服务密钥无效，请联系管理员更新配置。",
+  insufficient_credits: "AI 服务额度不足，请联系管理员充值后重试。",
+  model_request_failed: "AI 分析请求失败，请稍后重试。",
+  image_upload_failed: "照片发送至 AI 服务失败，请稍后重试。",
   rate_limited: "当前生成请求较多，请稍后重试。",
   moderation_blocked: "这张照片无法处理，请更换本人清晰正面照。",
   insufficient_previews: "可用预览数量不足，请重新生成。",
@@ -456,7 +460,7 @@ export function HairApp() {
       </>}
 
       {job && !resultReady && <section className="progress-page">
-        <div className="progress-heading"><p className="eyebrow">ANALYSIS IN PROGRESS</p><h1>正在为你生成<br />六张真人预览<span>。</span></h1>{job.demoMode && <p className="demo-notice">演示模式：当前未配置 OpenAI API Key，流程和报告可完整体验，预览暂用原图占位。</p>}</div>
+        <div className="progress-heading"><p className="eyebrow">ANALYSIS IN PROGRESS</p><h1>正在为你生成<br />六张真人预览<span>。</span></h1>{job.demoMode && <p className="demo-notice">演示模式：当前未配置 AI 服务密钥，流程和报告可完整体验，预览暂用原图占位。</p>}</div>
         <div className="progress-meter"><div style={{ width: `${job.progress}%` }} /><strong>{job.progress}%</strong></div>
         <ol className="status-steps">{STATUS_STEPS.map((step, index) => { const current = statusRank(job.status); return <li className={index < current ? "done" : index === current ? "active" : ""} key={step.status}><span>{String(index + 1).padStart(2, "0")}</span><b>{step.zh}</b><small>{step.en}</small></li>; })}</ol>
         <div className="generating-grid">{(job.assets.length ? job.assets : [

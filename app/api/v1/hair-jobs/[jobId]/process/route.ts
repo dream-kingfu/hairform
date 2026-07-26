@@ -1,4 +1,5 @@
 import { authorizeJob, claimInitialJob, failJobWork, getJob, toJobView } from "@/lib/server/jobs";
+import { safeErrorCode } from "@/lib/server/openai";
 import { processJob } from "@/lib/server/processor";
 
 export const dynamic = "force-dynamic";
@@ -21,8 +22,9 @@ export async function POST(request: Request, context: Context) {
   try {
     const processed = await processJob(claimed);
     return Response.json(processed ? toJobView(processed) : { error: "job_not_found" });
-  } catch {
-    await failJobWork(jobId, "processing_failed");
-    return Response.json({ error: "processing_failed" }, { status: 500 });
+  } catch (error) {
+    const errorCode = safeErrorCode(error);
+    await failJobWork(jobId, errorCode);
+    return Response.json({ error: errorCode }, { status: 500 });
   }
 }
