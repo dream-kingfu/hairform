@@ -5,7 +5,13 @@ import { buildHairPresentation } from "@/lib/hair/presentation";
 interface RuntimeBindings {
   DB: D1Database;
   HAIR_ASSETS: R2Bucket;
+  AI_PROVIDER?: string;
   OPENAI_API_KEY?: string;
+  KIE_API_KEY?: string;
+  KIE_API_BASE?: string;
+  KIE_UPLOAD_BASE?: string;
+  KIE_ANALYSIS_MODEL?: string;
+  KIE_IMAGE_MODEL?: string;
   ANALYSIS_MODEL?: string;
   IMAGE_MODEL?: string;
   DEMO_MODE?: string;
@@ -103,7 +109,9 @@ export async function hashToken(token: string) {
 }
 
 export function isDemoMode() {
-  return bindings.DEMO_MODE === "true" || !bindings.OPENAI_API_KEY;
+  if (bindings.DEMO_MODE === "true") return true;
+  const provider = bindings.AI_PROVIDER?.trim().toLowerCase() || (bindings.KIE_API_KEY ? "kie" : "openai");
+  return provider === "kie" ? !bindings.KIE_API_KEY : !bindings.OPENAI_API_KEY;
 }
 
 export function jobCookieName(jobId: string) {

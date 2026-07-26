@@ -14,21 +14,25 @@ npm install
 npm run dev
 ```
 
-未配置 `OPENAI_API_KEY` 时自动进入演示模式，完整任务流和报告仍可操作，六张预览使用原图作为诚实占位。
+未配置所选服务商的 API Key 时自动进入演示模式，完整任务流和报告仍可操作，六张预览使用原图作为诚实占位。
 
-复制 `.env.example` 为 `.env.local` 并填入密钥后启用真实生成：
+Kie 使用文件流上传、异步生成任务和统一任务查询接口。复制 `.env.example` 为 `.env.local` 并填入密钥后启用真实生成：
 
 ```text
-OPENAI_API_KEY=...
-ANALYSIS_MODEL=gpt-5.6-terra
-IMAGE_MODEL=gpt-image-2-2026-04-21
+AI_PROVIDER=kie
+KIE_API_KEY=...
+KIE_ANALYSIS_MODEL=gpt-5-6-terra
+KIE_IMAGE_MODEL=gpt-image-2-image-to-image
 DEMO_MODE=false
 ```
+
+仍可将 `AI_PROVIDER` 设为 `openai` 并使用 `OPENAI_API_KEY`、`ANALYSIS_MODEL`、`IMAGE_MODEL` 保留原有官方接口路径。API Key 只允许保存在本地未提交的环境文件或托管平台加密环境变量中。
 
 ## 数据边界
 
 - D1 保存任务状态和结构化分析，R2 保存原图、可选头发蒙版、预览和报告。
 - 所有任务都有 24 小时到期时间；读取任务时会清理过期内容，生产环境还应为 R2 配置同等生命周期规则。
+- 使用 Kie 时原始肖像会先上传到其临时文件服务。Kie 文档对临时文件删除时间存在 24 小时与 3 天两种描述，正式上线前必须向 Kie 确认实际保留期限，并让隐私指引与真实期限一致。
 - 图片、访问令牌和完整模型提示词不会写入业务日志。
 - 任务使用高熵访问令牌和 HttpOnly、SameSite Cookie；令牌不进入公开页面 URL。
 

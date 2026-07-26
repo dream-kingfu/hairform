@@ -33,12 +33,13 @@ async function generateOne(input: {
       const passes = await qualityCheck({
         id: input.asset.id,
         original: input.image,
-        output,
+        output: output.bytes,
+        outputType: output.contentType,
         originalType: input.contentType,
         analysis: input.analysis,
       });
       if (!passes) throw new Error("quality_check_failed");
-      await putAsset(assetKey(input.job.id, input.asset.id), output, input.job.demo_mode ? input.contentType : "image/png");
+      await putAsset(assetKey(input.job.id, input.asset.id), output.bytes, output.contentType);
       return { ...input.asset, status: "ready" as const, errorCode: undefined };
     } catch (error) {
       lastError = error;

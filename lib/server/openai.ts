@@ -2,8 +2,24 @@ import { HAIR_COLOR_CATALOG, HAIRSTYLE_CATALOG, getColor, getStyle } from "@/lib
 import type { AssetId, HairAnalysis, HairColorRecommendation, HairstyleRecommendation } from "@/lib/hair/types";
 import { bindings, isDemoMode } from "./jobs";
 
-const ANALYSIS_MODEL = () => bindings.ANALYSIS_MODEL || "gpt-5.6-terra";
-const IMAGE_MODEL = () => bindings.IMAGE_MODEL || "gpt-image-2-2026-04-21";
+const KIE_DEFAULT_API_BASE = "https://api.kie.ai";
+const KIE_DEFAULT_UPLOAD_BASE = "https://kieai.redpandaai.co";
+const kieUploadCache = new WeakMap<ArrayBuffer, Promise<string>>();
+
+function provider() {
+  return bindings.AI_PROVIDER?.trim().toLowerCase() || (bindings.KIE_API_KEY ? "kie" : "openai");
+}
+
+function isKie() {
+  return provider() === "kie";
+}
+
+const ANALYSIS_MODEL = () => isKie()
+  ? bindings.KIE_ANALYSIS_MODEL || "gpt-5-6-terra"
+  : bindings.ANALYSIS_MODEL || "gpt-5.6-terra";
+const IMAGE_MODEL = () => isKie()
+  ? bindings.KIE_IMAGE_MODEL || "gpt-image-2-image-to-image"
+  : bindings.IMAGE_MODEL || "gpt-image-2-2026-04-21";
 
 const analysisSchema = {
   type: "object",
@@ -91,6 +107,146 @@ async function openAIRequest(path: string, init: RequestInit) {
   return response;
 }
 
+function kieHeaders(headers?: HeadersInit) {
+  return {
+    Authorization: `Bearer ${bindings.KIE_API_KEY}`,
+    ...(headers ?? {}),
+  };
+}
+
+async function kieRequest(url: string, init: RequestInit, timeout = 150_000) {
+  const response = await fetch(url, {
+    ...init,
+    headers: kieHeaders(init.headers),
+    signal: AbortSignal.timeout(timeout),
+  });
+  if (!response.ok) {
+    const body = await response.text();
+    const code = response.status === 429 ? "rate_limited" : body.toLowerCase().includes("moderation") ? "moderation_blocked" : "model_request_failed";
+    throw new Error(code);
+  }
+  return response;
+}
+
+async function kieJson(url: string, init: RequestInit, timeout?: number) {
+  const response = await kieRequest(url, init, timeout);
+  const text = await response.text();
+  try {
+    return JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    const events = text.split(/\r?\n/)
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trim())
+      .filter((line) => line && line !== "[DONE]");
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+      try { return JSON.parse(events[index]) as Record<string, unknown>; } catch { /* keep scanning */ }
+    }
+    throw new Error("model_request_failed");
+  }
+}
+
+async function uploadKieImage(bytes: ArrayBuffer, contentType: string) {
+  const cached = kieUploadCache.get(bytes);
+  if (cached) return cached;
+  const uploading = (async () => {
+    const form = new FormData();
+    const extension = contentType === "image/jpeg" ? "jpg" : contentType === "image/webp" ? "webp" : "png";
+    form.append("file", new File([bytes], `hairform-${crypto.randomUUID()}.${extension}`, { type: contentType }));
+    form.append("uploadPath", "hairform/portraits");
+    const payload = await kieJson(`${bindings.KIE_UPLOAD_BASE || KIE_DEFAULT_UPLOAD_BASE}/api/file-stream-upload`, {
+      method: "POST",
+      body: form,
+    });
+    const data = payload.data as Record<string, unknown> | undefined;
+    const url = typeof data?.downloadUrl === "string" ? data.downloadUrl : typeof data?.fileUrl === "string" ? data.fileUrl : undefined;
+    if (!url) throw new Error("image_upload_failed");
+    return url;
+  })();
+  kieUploadCache.set(bytes, uploading);
+  try {
+    return await uploading;
+  } catch (error) {
+    kieUploadCache.delete(bytes);
+    throw error;
+  }
+}
+
+async function kieResponsesRequest(body: Record<string, unknown>) {
+  return kieJson(`${bindings.KIE_API_BASE || KIE_DEFAULT_API_BASE}/codex/v1/responses`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...body, stream: false }),
+  });
+}
+
+function parseEmbeddedJson<T>(value: string): T {
+  const cleaned = value.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  const start = cleaned.indexOf("{");
+  const end = cleaned.lastIndexOf("}");
+  if (start < 0 || end <= start) throw new Error("analysis_output_missing");
+  return JSON.parse(cleaned.slice(start, end + 1)) as T;
+}
+
+function wait(delay: number) {
+  return new Promise((resolve) => setTimeout(resolve, delay));
+}
+
+async function createKieImageTask(prompt: string, inputUrl: string) {
+  const payload = await kieJson(`${bindings.KIE_API_BASE || KIE_DEFAULT_API_BASE}/api/v1/jobs/createTask`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: IMAGE_MODEL(),
+      input: { prompt, input_urls: [inputUrl], aspect_ratio: "auto" },
+    }),
+  });
+  const taskId = (payload.data as Record<string, unknown> | undefined)?.taskId;
+  if (typeof taskId !== "string" || !taskId) throw new Error("image_task_failed");
+  return taskId;
+}
+
+async function waitForKieImage(taskId: string) {
+  const deadline = Date.now() + 240_000;
+  let delay = 2_000;
+  while (Date.now() < deadline) {
+    const payload = await kieJson(`${bindings.KIE_API_BASE || KIE_DEFAULT_API_BASE}/api/v1/jobs/recordInfo?taskId=${encodeURIComponent(taskId)}`, {
+      method: "GET",
+    });
+    const data = payload.data as Record<string, unknown> | undefined;
+    const state = typeof data?.state === "string" ? data.state : "";
+    if (state === "success") {
+      const result = typeof data?.resultJson === "string" ? JSON.parse(data.resultJson) as Record<string, unknown> : data?.resultJson as Record<string, unknown> | undefined;
+      const urls = result?.resultUrls;
+      const url = Array.isArray(urls) && typeof urls[0] === "string" ? urls[0] : undefined;
+      if (!url) throw new Error("image_output_missing");
+      return url;
+    }
+    if (state === "fail") {
+      const message = `${data?.failCode ?? ""} ${data?.failMsg ?? ""}`.toLowerCase();
+      throw new Error(message.includes("moderation") || message.includes("safety") ? "moderation_blocked" : "model_request_failed");
+    }
+    await wait(delay);
+    delay = Math.min(5_000, delay + 500);
+  }
+  throw new Error("model_request_failed");
+}
+
+async function downloadKieImage(url: string) {
+  let response = await fetch(url, { signal: AbortSignal.timeout(60_000) });
+  if (!response.ok) {
+    const payload = await kieJson(`${bindings.KIE_API_BASE || KIE_DEFAULT_API_BASE}/api/v1/common/download-url`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+    });
+    if (typeof payload.data !== "string") throw new Error("image_output_missing");
+    response = await fetch(payload.data, { signal: AbortSignal.timeout(60_000) });
+  }
+  const contentType = response.headers.get("content-type")?.split(";")[0] || "";
+  if (!response.ok || !contentType.startsWith("image/")) throw new Error("image_output_missing");
+  return { bytes: await response.arrayBuffer(), contentType };
+}
+
 function responseText(payload: Record<string, unknown>) {
   if (typeof payload.output_text === "string") return payload.output_text;
   const output = Array.isArray(payload.output) ? payload.output : [];
@@ -144,17 +300,20 @@ export async function analyzePortrait(image: ArrayBuffer, contentType: string) {
   if (isDemoMode()) return demoAnalysis();
   const catalog = HAIRSTYLE_CATALOG.map(({ id, length, fringeId, partId, textures, densities, faceShapes }) => ({ id, length, fringeId, partId, textures, densities, faceShapes }));
   const prompt = `Analyze this single front-facing male portrait for hairstyle recommendation. Return only the requested structured data. First check photo suitability and add only these warning ids when present: side_angle, hat, hairline_occluded, multiple_faces, no_face, too_dark, face_too_small. Add single_front_photo_estimate for an otherwise usable photo. Treat hair density, hairline, forehead and undertone as visual estimates; use unknown whenever the photo does not support a reliable judgment. Select exactly one catalog style for each slot: best short, best medium, best long, and one less suitable comparison. Select two conservative hair colors. Do not infer identity, ethnicity, health, personality, attractiveness, or age. Catalog: ${JSON.stringify(catalog)}.`;
-  const response = await openAIRequest("/responses", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+  const imageUrl = isKie() ? await uploadKieImage(image, contentType) : dataUrl(image, contentType);
+  const requestBody = {
       model: ANALYSIS_MODEL(),
-      input: [{ role: "user", content: [{ type: "input_text", text: prompt }, { type: "input_image", image_url: dataUrl(image, contentType) }] }],
+      input: [{ role: "user", content: [{ type: "input_text", text: prompt }, { type: "input_image", image_url: imageUrl }] }],
       text: { format: { type: "json_schema", name: "hair_analysis", strict: true, schema: analysisSchema } },
-    }),
-  });
-  const payload = await response.json() as Record<string, unknown>;
-  return normalizeAnalysis(JSON.parse(responseText(payload)) as HairAnalysis);
+  };
+  const payload = isKie()
+    ? await kieResponsesRequest(requestBody)
+    : await (await openAIRequest("/responses", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(requestBody),
+    })).json() as Record<string, unknown>;
+  return normalizeAnalysis(parseEmbeddedJson<HairAnalysis>(responseText(payload)));
 }
 
 function sharedEditRules() {
@@ -179,11 +338,19 @@ export async function editPortrait(input: {
   analysis: HairAnalysis;
   mask?: ArrayBuffer;
 }) {
-  if (isDemoMode()) return input.image.slice(0);
+  if (isDemoMode()) return { bytes: input.image.slice(0), contentType: input.contentType };
   const style = input.analysis.hairstyleSlots.find((item) => item.slot === input.id);
   const colorIndex = input.id === "color_primary" ? 0 : 1;
   const color = input.analysis.colors[colorIndex];
   const prompt = style ? hairstylePrompt(style) : colorPrompt(color);
+  if (isKie()) {
+    const inputUrl = await uploadKieImage(input.image, input.contentType);
+    const taskId = await createKieImageTask(
+      input.mask ? `${prompt} This is a retry: preserve every non-hair pixel as closely as possible and make the edit strictly local to scalp hair.` : prompt,
+      inputUrl,
+    );
+    return downloadKieImage(await waitForKieImage(taskId));
+  }
   const form = new FormData();
   form.append("model", IMAGE_MODEL());
   form.append("image", new File([input.image], "portrait.png", { type: input.contentType }));
@@ -200,13 +367,14 @@ export async function editPortrait(input: {
   const binary = atob(encoded);
   const result = new Uint8Array(binary.length);
   for (let index = 0; index < binary.length; index += 1) result[index] = binary.charCodeAt(index);
-  return result.buffer;
+  return { bytes: result.buffer, contentType: "image/png" };
 }
 
 export async function qualityCheck(input: {
   id: AssetId;
   original: ArrayBuffer;
   output: ArrayBuffer;
+  outputType: string;
   originalType: string;
   analysis: HairAnalysis;
 }) {
@@ -214,25 +382,29 @@ export async function qualityCheck(input: {
   const style = input.analysis.hairstyleSlots.find((item) => item.slot === input.id);
   const color = input.id === "color_primary" ? input.analysis.colors[0] : input.id === "color_secondary" ? input.analysis.colors[1] : undefined;
   const target = style ? `${style.styleId}, fringe ${style.fringeId}, part ${style.partId}` : `hair color ${color?.colorId}, unchanged hairstyle`;
-  const response = await openAIRequest("/responses", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+  const originalUrl = isKie() ? await uploadKieImage(input.original, input.originalType) : dataUrl(input.original, input.originalType);
+  const outputUrl = isKie() ? await uploadKieImage(input.output, input.outputType) : dataUrl(input.output, input.outputType);
+  const requestBody = {
       model: ANALYSIS_MODEL(),
       input: [{ role: "user", content: [
         { type: "input_text", text: `Compare the original portrait and edited result. Target: ${target}. Check only same-person visual consistency, preservation of non-hair regions, target hair match, and obvious rendering artifacts. This is not identity recognition.` },
-        { type: "input_image", image_url: dataUrl(input.original, input.originalType) },
-        { type: "input_image", image_url: dataUrl(input.output, "image/png") },
+        { type: "input_image", image_url: originalUrl },
+        { type: "input_image", image_url: outputUrl },
       ] }],
       text: { format: { type: "json_schema", name: "hair_preview_qc", strict: true, schema: qcSchema } },
-    }),
-  });
-  const payload = await response.json() as Record<string, unknown>;
-  const qc = JSON.parse(responseText(payload)) as { identityPreserved: boolean; hairTargetMatched: boolean; nonHairRegionPreserved: boolean; artifactFree: boolean; confidence: number };
+  };
+  const payload = isKie()
+    ? await kieResponsesRequest(requestBody)
+    : await (await openAIRequest("/responses", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(requestBody),
+    })).json() as Record<string, unknown>;
+  const qc = parseEmbeddedJson<{ identityPreserved: boolean; hairTargetMatched: boolean; nonHairRegionPreserved: boolean; artifactFree: boolean; confidence: number }>(responseText(payload));
   return qc.identityPreserved && qc.hairTargetMatched && qc.nonHairRegionPreserved && qc.artifactFree && qc.confidence >= 0.72;
 }
 
 export function safeErrorCode(error: unknown) {
   const value = error instanceof Error ? error.message : "unknown_error";
-  return ["rate_limited", "moderation_blocked", "analysis_schema_invalid", "analysis_slots_invalid", "analysis_style_invalid", "analysis_color_invalid", "analysis_output_missing", "image_output_missing", "model_request_failed"].includes(value) ? value : "generation_failed";
+  return ["rate_limited", "moderation_blocked", "analysis_schema_invalid", "analysis_slots_invalid", "analysis_style_invalid", "analysis_color_invalid", "analysis_output_missing", "image_output_missing", "image_upload_failed", "image_task_failed", "model_request_failed"].includes(value) ? value : "generation_failed";
 }
