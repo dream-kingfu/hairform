@@ -31,6 +31,10 @@ test("extracts chat-completions compatible responses", () => {
   assert.equal(extractKieResponseText({ choices: [{ message: { content: json } }] }), json);
 });
 
+test("extracts Kie code-msg-data string envelopes", () => {
+  assert.equal(extractKieResponseText({ code: 200, msg: "success", data: json }), json);
+});
+
 test("rejects envelopes without assistant text", () => {
   assert.throws(() => extractKieResponseText({ type: "response.completed" }), /analysis_output_missing/);
   assert.deepEqual(describeKieResponseShape({ type: "response.completed", response: { status: "failed" } }), {
@@ -38,6 +42,8 @@ test("rejects envelopes without assistant text", () => {
     type: "response.completed",
     keys: ["type", "response"],
     responseKeys: ["status"],
+    dataKind: "undefined",
+    dataKeys: undefined,
     eventCount: undefined,
   });
 });

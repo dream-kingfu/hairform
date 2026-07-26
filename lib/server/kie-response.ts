@@ -41,7 +41,7 @@ function visit(value: unknown, seen: Set<object>, allowString = false, depth = 0
 
   for (const key of ["output", "content", "response", "message", "data", "result", "events"] as const) {
     const candidate = record[key];
-    const allowNestedString = key === "content" || key === "message" || key === "result";
+    const allowNestedString = key === "content" || key === "message" || key === "data" || key === "result";
     const found = visit(candidate, seen, allowNestedString, depth + 1);
     if (found) return found;
   }
@@ -58,11 +58,14 @@ export function extractKieResponseText(payload: unknown) {
 export function describeKieResponseShape(payload: unknown) {
   if (!isRecord(payload)) return { kind: Array.isArray(payload) ? "array" : typeof payload };
   const response = isRecord(payload.response) ? payload.response : undefined;
+  const data = isRecord(payload.data) ? payload.data : undefined;
   return {
     kind: "object",
     type: typeof payload.type === "string" ? payload.type : undefined,
     keys: Object.keys(payload).slice(0, 12),
     responseKeys: response ? Object.keys(response).slice(0, 12) : undefined,
+    dataKind: Array.isArray(payload.data) ? "array" : typeof payload.data,
+    dataKeys: data ? Object.keys(data).slice(0, 12) : undefined,
     eventCount: Array.isArray(payload.events) ? payload.events.length : undefined,
   };
 }
