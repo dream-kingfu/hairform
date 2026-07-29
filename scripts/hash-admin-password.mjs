@@ -12,5 +12,5 @@ if (password.length < 12) {
   const salt = randomBytes(18);
   const iterations = 310000;
   const digest = pbkdf2Sync(password, salt, iterations, 32, "sha256");
-  console.log(`pbkdf2_sha256$${iterations}$${salt.toString("base64")}$${digest.toString("base64")}`);
+  console.log(`pbkdf2_sha256:${iterations}:${salt.toString("base64")}:${digest.toString("base64")}`);
 }
