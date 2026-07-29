@@ -76,16 +76,16 @@ async function recordLoginFailure(fingerprint: string) {
 
 export async function loginAdmin(request: Request, password: string) {
   await ensureSchema();
-  if (!bindings.ADMIN_PASSWORD_HASH || !bindings.ADMIN_SESSION_SECRET || bindings.ADMIN_SESSION_SECRET.length < 32) throw new Error("admin_login_failed");
+  if (!bindings.ADMIN_PASSWORD_HASH || !bindings.ADMIN_SESSION_SECRET || bindings.ADMIN_SESSION_SECRET.length < 32) throw new Error("admin_not_configured");
   const fingerprint = await adminIpFingerprint(request);
   if (await loginLock(fingerprint)) {
     await writeAdminAudit("login_failed", { details: { reason: "locked" }, ipFingerprint: fingerprint });
-    throw new Error("admin_login_failed");
+    throw new Error("admin_login_locked");
   }
   if (!(await verifyPassword(password))) {
     await recordLoginFailure(fingerprint);
     await writeAdminAudit("login_failed", { details: { reason: "invalid" }, ipFingerprint: fingerprint });
-    throw new Error("admin_login_failed");
+    throw new Error("admin_password_invalid");
   }
   const token = randomToken();
   const csrf = randomToken();
