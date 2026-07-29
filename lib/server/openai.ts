@@ -1,8 +1,8 @@
 import { HAIR_COLOR_CATALOG, HAIRSTYLE_CATALOG, getColor, getStyle } from "@/lib/hair/catalog";
-import type { AssetId, HairAnalysis, HairColorRecommendation, HairstyleRecommendation } from "@/lib/hair/types";
+import type { AnalysisProvider, AssetId, HairAnalysis, HairColorRecommendation, HairstyleRecommendation } from "@/lib/hair/types";
 import { bindings, isDemoMode } from "./jobs";
 import { describeKieResponseShape, extractKieResponseText } from "./kie-response";
-import { assertProductionModelPolicy, modelFor, reasoningFor, type ModelPurpose } from "./model-policy";
+import { ANALYSIS_MODEL_ALLOWLIST, assertAnalysisModelPolicy, assertProductionModelPolicy, modelFor, reasoningFor, type ModelPurpose } from "./model-policy";
 import { recordProviderFailure, recordProviderSuccess } from "./provider-health";
 
 const KIE_DEFAULT_API_BASE = "https://api.kie.ai";
@@ -323,6 +323,80 @@ function responseText(payload: Record<string, unknown>) {
   }
 }
 
+function chatCompletionText(payload: Record<string, unknown>) {
+  const choices = payload.choices;
+  if (!Array.isArray(choices)) throw new Error("analysis_output_missing");
+  const message = (choices[0] as Record<string, unknown> | undefined)?.message as Record<string, unknown> | undefined;
+  if (typeof message?.content !== "string" || !message.content.trim()) throw new Error("analysis_output_missing");
+  return message.content;
+}
+
+function providerKey(providerId: AnalysisProvider) {
+  return providerId === "kie" ? bindings.KIE_API_KEY : providerId === "qwen" ? bindings.QWEN_API_KEY : bindings.GLM_API_KEY;
+}
+
+export function isAnalysisProviderConfigured(providerId: AnalysisProvider) {
+  return Boolean(providerKey(providerId)?.trim());
+}
+
+async function compatibleVisionRequest(providerId: "qwen" | "glm", prompt: string, image: ArrayBuffer, contentType: string) {
+  const apiKey = providerKey(providerId);
+  if (!apiKey) throw new Error("provider_not_configured");
+  const base = providerId === "qwen"
+    ? bindings.QWEN_API_BASE || "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    : bindings.GLM_API_BASE || "https://open.bigmodel.cn/api/paas/v4";
+  const body: Record<string, unknown> = {
+    model: ANALYSIS_MODEL_ALLOWLIST[providerId],
+    messages: [{ role: "user", content: [
+      { type: "image_url", image_url: { url: dataUrl(image, contentType) } },
+      { type: "text", text: prompt },
+    ] }],
+    stream: false,
+    temperature: 0.1,
+  };
+  if (providerId === "qwen") {
+    body.enable_thinking = false;
+    body.response_format = { type: "json_object" };
+  }
+  else body.thinking = { type: "disabled" };
+  const response = await fetch(`${base.replace(/\/$/, "")}/chat/completions`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(150_000),
+  });
+  if (!response.ok) {
+    const errorBody = await response.text();
+    const lowered = errorBody.toLowerCase();
+    const code = response.status === 401 ? "invalid_api_key"
+      : response.status === 429 ? "rate_limited"
+        : lowered.includes("safety") || lowered.includes("moderation") ? "moderation_blocked" : "model_request_failed";
+    throw new Error(code);
+  }
+  return await response.json() as Record<string, unknown>;
+}
+
+export async function testAnalysisProvider(providerId: AnalysisProvider) {
+  const started = Date.now();
+  if (!isAnalysisProviderConfigured(providerId)) throw new Error("provider_not_configured");
+  assertAnalysisModelPolicy(providerId, ANALYSIS_MODEL_ALLOWLIST[providerId]);
+  if (providerId === "kie") {
+    await kieResponsesRequest({ model: ANALYSIS_MODEL_ALLOWLIST.kie, input: "Return only the word OK.", reasoning: { effort: "low" } });
+  } else {
+    const base = providerId === "qwen"
+      ? bindings.QWEN_API_BASE || "https://dashscope.aliyuncs.com/compatible-mode/v1"
+      : bindings.GLM_API_BASE || "https://open.bigmodel.cn/api/paas/v4";
+    const response = await fetch(`${base.replace(/\/$/, "")}/chat/completions`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${providerKey(providerId)}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: ANALYSIS_MODEL_ALLOWLIST[providerId], messages: [{ role: "user", content: "Return only OK." }], stream: false, max_tokens: 8 }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!response.ok) throw new Error(response.status === 401 ? "invalid_api_key" : response.status === 429 ? "rate_limited" : "model_request_failed");
+  }
+  return { latencyMs: Date.now() - started, model: ANALYSIS_MODEL_ALLOWLIST[providerId] };
+}
+
 export function demoAnalysis(): HairAnalysis {
   return {
     faceShape: "oval",
@@ -346,12 +420,21 @@ export function demoAnalysis(): HairAnalysis {
   };
 }
 
-function normalizeAnalysis(value: HairAnalysis): HairAnalysis {
+export function normalizeAnalysis(value: HairAnalysis): HairAnalysis {
   const slots = ["best_short", "best_medium", "best_long", "less_suitable"];
   const validStyleIds = new Set(HAIRSTYLE_CATALOG.map((style) => style.id));
   const validColorIds = new Set<string>(HAIR_COLOR_CATALOG.map((color) => color.id));
+  const enumChecks: Array<[unknown, string[]]> = [
+    [value?.faceShape, ["oval", "round", "square", "heart", "oblong", "diamond", "mixed", "unknown"]],
+    [value?.hairTexture, ["straight", "wavy", "curly", "coily", "unknown"]],
+    [value?.hairDensity, ["low", "medium", "high", "unknown"]],
+    [value?.hairline, ["low", "balanced", "high", "receding", "widows_peak", "unknown"]],
+    [value?.foreheadRatio, ["short", "balanced", "long", "unknown"]],
+    [value?.skinUndertone, ["warm", "cool", "neutral", "unknown"]],
+  ];
+  if (enumChecks.some(([candidate, allowed]) => typeof candidate !== "string" || !allowed.includes(candidate))) throw new Error("analysis_schema_invalid");
   if (!value || value.hairstyleSlots?.length !== 4 || value.colors?.length !== 2) throw new Error("analysis_schema_invalid");
-  if (!slots.every((slot) => value.hairstyleSlots.some((item) => item.slot === slot))) throw new Error("analysis_slots_invalid");
+  if (!slots.every((slot) => value.hairstyleSlots.filter((item) => item.slot === slot).length === 1)) throw new Error("analysis_slots_invalid");
   if (!value.hairstyleSlots.every((item) => validStyleIds.has(item.styleId))) throw new Error("analysis_style_invalid");
   if (!value.colors.every((item) => validColorIds.has(item.colorId))) throw new Error("analysis_color_invalid");
   return {
@@ -360,26 +443,23 @@ function normalizeAnalysis(value: HairAnalysis): HairAnalysis {
   };
 }
 
-export async function analyzePortrait(image: ArrayBuffer, contentType: string) {
+export async function analyzePortrait(image: ArrayBuffer, contentType: string, analysisProvider: AnalysisProvider = "kie") {
   if (isDemoMode()) return demoAnalysis();
-  assertProductionModelPolicy(bindings);
+  assertAnalysisModelPolicy(analysisProvider, ANALYSIS_MODEL_ALLOWLIST[analysisProvider]);
   const catalog = HAIRSTYLE_CATALOG.map(({ id, length, fringeId, partId, textures, densities, faceShapes }) => ({ id, length, fringeId, partId, textures, densities, faceShapes }));
   const prompt = `Analyze this single front-facing male portrait for hairstyle recommendation. Return exactly one valid JSON object matching the required JSON Schema, with no Markdown or commentary. First check photo suitability and add only these warning ids when present: side_angle, hat, hairline_occluded, multiple_faces, no_face, too_dark, face_too_small. Add single_front_photo_estimate for an otherwise usable photo. Treat hair density, hairline, forehead and undertone as visual estimates; use unknown whenever the photo does not support a reliable judgment. Select exactly one catalog style for each slot: best short, best medium, best long, and one less suitable comparison. Select two conservative hair colors. Do not infer identity, ethnicity, health, personality, attractiveness, or age. Required JSON Schema: ${JSON.stringify(analysisSchema)}. Catalog: ${JSON.stringify(catalog)}.`;
-  const imageUrl = isKie() ? await uploadKieImage(image, contentType) : dataUrl(image, contentType);
+  const imageUrl = analysisProvider === "kie" ? await uploadKieImage(image, contentType) : dataUrl(image, contentType);
   const requestBody = responsesBody(
     [{ role: "user", content: [{ type: "input_text", text: prompt }, { type: "input_image", image_url: imageUrl }] }],
     "hair_analysis",
     analysisSchema,
     "analysis",
   );
-  const payload = isKie()
+  const payload = analysisProvider === "kie"
     ? await kieResponsesRequest(requestBody)
-    : await (await openAIRequest("/responses", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(requestBody),
-    })).json() as Record<string, unknown>;
-  return normalizeAnalysis(parseEmbeddedJson<HairAnalysis>(responseText(payload)));
+    : await compatibleVisionRequest(analysisProvider, prompt, image, contentType);
+  const raw = analysisProvider === "kie" ? responseText(payload) : chatCompletionText(payload);
+  return normalizeAnalysis(parseEmbeddedJson<HairAnalysis>(raw));
 }
 
 function sharedEditRules() {
@@ -500,5 +580,5 @@ export async function qualityCheck(input: {
 
 export function safeErrorCode(error: unknown) {
   const value = error instanceof Error ? error.message : "unknown_error";
-  return ["invalid_api_key", "insufficient_credits", "service_paused_low_credit", "service_temporarily_unavailable", "model_policy_error", "model_daily_limit", "analysis_call_limit", "image_call_limit_reached", "quality_call_limit", "quality_check_failed", "quality_service_failed", "rate_limited", "moderation_blocked", "analysis_schema_invalid", "analysis_slots_invalid", "analysis_style_invalid", "analysis_color_invalid", "analysis_output_missing", "image_output_missing", "image_upload_failed", "image_task_failed", "model_request_failed"].includes(value) ? value : "generation_failed";
+  return ["invalid_api_key", "provider_not_configured", "insufficient_credits", "service_paused_low_credit", "service_temporarily_unavailable", "model_policy_error", "model_daily_limit", "analysis_call_limit", "image_call_limit_reached", "quality_call_limit", "quality_check_failed", "quality_service_failed", "rate_limited", "moderation_blocked", "analysis_schema_invalid", "analysis_slots_invalid", "analysis_style_invalid", "analysis_color_invalid", "analysis_output_missing", "image_output_missing", "image_upload_failed", "image_task_failed", "model_request_failed"].includes(value) ? value : "generation_failed";
 }

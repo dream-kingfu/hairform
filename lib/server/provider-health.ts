@@ -73,7 +73,7 @@ async function credits() {
   return value;
 }
 
-export async function ensureCanAcceptNewJob() {
+export async function ensureCanGeneratePreview() {
   if (isDemoMode()) return;
   assertProductionModelPolicy(bindings);
   if (await isProviderCircuitOpen()) throw new Error("service_temporarily_unavailable");

@@ -47,6 +47,14 @@ DEMO_MODE=false
 - 同一任务使用数据库原子锁防止并发重复处理；达到限额时接口返回 `429` 与标准 `Retry-After`。
 - 生产环境必须设置随机 `RATE_LIMIT_SALT`，并可通过环境变量调整全部额度。
 
+## V0.4 文字优先与管理后台
+
+- 新任务默认采用 `text-first-v1`，一次视觉分析后立即获得文字建议、发色色卡、三款理发师沟通卡和双语报告，不调用 Image2。
+- `/admin` 为独立密码管理后台，可在 Kie Terra、Qwen3.6-Flash、GLM-4.6V-Flash 之间切换，并控制真人预览是否开放。
+- 供应商 API Key、`ADMIN_PASSWORD_HASH` 和 `ADMIN_SESSION_SECRET` 必须只保存在 Sites 加密环境变量中；后台不会读取或返回密钥内容。
+- 生成管理员密码哈希可在本机运行 `npm run admin:hash-password`，然后把输出值填入 Sites 的 `ADMIN_PASSWORD_HASH`。同时设置至少32字符的随机 `ADMIN_SESSION_SECRET` 和递增的 `ADMIN_PASSWORD_VERSION`。
+- 切换供应商前必须先配置对应 Key，并在后台完成一次连接测试；健康结果30分钟内有效。
+
 ## 验证
 
 ```bash

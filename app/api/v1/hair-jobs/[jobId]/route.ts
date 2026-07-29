@@ -22,7 +22,7 @@ export async function GET(request: Request, context: Context) {
       }
     }
   }
-  return Response.json(toJobView(current ?? authorized), { headers: { "Cache-Control": "no-store" } });
+  return Response.json(await toJobView(current ?? authorized), { headers: { "Cache-Control": "no-store" } });
 }
 
 export async function DELETE(request: Request, context: Context) {

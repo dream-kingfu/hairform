@@ -45,19 +45,20 @@ async function runQualityCheck(input: Parameters<typeof qualityCheck>[0], jobId:
 
 export async function analyzeJob(job: StoredJob) {
   if (job.analysis_json) {
-    await updateJob(job.id, { status: "awaiting_selection", progress: 35, errorCode: null, workLockUntil: null });
+    await updateJob(job.id, { status: job.generation_policy === "text-first-v1" ? "analysis_ready" : "awaiting_selection", progress: job.generation_policy === "text-first-v1" ? 100 : 35, errorCode: null, workLockUntil: null });
     return getJob(job.id);
   }
   const { image, contentType } = await sourceBytes(job);
   await updateJob(job.id, { status: "analyzing", progress: 12, errorCode: null });
   await reserveCall(job.id, "analysis", MODEL_POLICY.analysis.perJobLimit, "analysis_call_limit");
-  const analysis = await analyzePortrait(image, contentType);
+  const analysis = await analyzePortrait(image, contentType, job.analysis_provider);
   const qualityBlockers = new Set(["side_angle", "hat", "hairline_occluded", "multiple_faces", "no_face", "too_dark", "face_too_small"]);
   if (analysis.warnings.some((warning) => qualityBlockers.has(warning))) {
     await updateJob(job.id, { status: "failed", progress: 100, analysis, errorCode: "photo_quality_failed", workLockUntil: null });
     return getJob(job.id);
   }
-  await updateJob(job.id, { status: "awaiting_selection", progress: 35, analysis, errorCode: null, workLockUntil: null });
+  const textFirst = job.generation_policy === "text-first-v1";
+  await updateJob(job.id, { status: textFirst ? "analysis_ready" : "awaiting_selection", progress: textFirst ? 100 : 35, analysis, errorCode: null, workLockUntil: null });
   return getJob(job.id);
 }
 
@@ -66,7 +67,10 @@ export async function generateSelected(job: StoredJob, id: "best_short" | "best_
   const analysis = JSON.parse(job.analysis_json) as HairAnalysis;
   const { image, contentType, mask } = await sourceBytes(job);
   let assets = parseAssets(job).map((asset) => asset.id === id ? { ...asset, status: "generating" as const, errorCode: undefined } : asset);
-  await updateJob(job.id, { status: "generating", progress: 46, assets, reportKey: null, previewKey: null, errorCode: null });
+  await updateJob(job.id, {
+    status: "generating", progress: 46, assets, errorCode: null,
+    ...(job.generation_policy === "text-first-v1" ? {} : { reportKey: null, previewKey: null }),
+  });
   if (isDemoMode()) {
     const output = await editPortrait({ id, image, contentType, analysis });
     await putAsset(assetKey(job.id, id), output.bytes, output.contentType);
@@ -149,7 +153,7 @@ export async function advanceSelectedGeneration(job: StoredJob) {
   const code = safeErrorCode(lastError);
   const assets = parseAssets(current ?? job).map((asset) => asset.id === id ? { ...asset, status: "failed" as const, errorCode: code } : asset);
   await updateJob(job.id, {
-    status: "failed",
+    status: job.generation_policy === "text-first-v1" ? "analysis_ready" : "failed",
     progress: 100,
     assets,
     errorCode: code,

@@ -1,6 +1,6 @@
-import { cleanupExpiredJobs, createJobIdentity, hashToken, insertJob, isDemoMode, jobCookie, putAsset } from "@/lib/server/jobs";
+import { cleanupExpiredJobs, createJobIdentity, getRuntimeAiConfig, hashToken, insertJob, isDemoMode, jobCookie, putAsset } from "@/lib/server/jobs";
 import { consumeNewJobLimit, rateLimitResponse } from "@/lib/server/rate-limit";
-import { ensureCanAcceptNewJob } from "@/lib/server/provider-health";
+import { isAnalysisProviderConfigured } from "@/lib/server/openai";
 
 export const dynamic = "force-dynamic";
 
@@ -20,7 +20,8 @@ export async function POST(request: Request) {
       return Response.json({ error: "invalid_mask" }, { status: 400 });
     }
 
-    await ensureCanAcceptNewJob();
+    const runtime = await getRuntimeAiConfig();
+    if (!isDemoMode() && !isAnalysisProviderConfigured(runtime.analysisProvider)) throw new Error("provider_not_configured");
 
     const rateLimit = await consumeNewJobLimit(request);
     if (!rateLimit.allowed) return rateLimitResponse(rateLimit);
@@ -36,6 +37,8 @@ export async function POST(request: Request) {
       originalKey,
       maskKey,
       demoMode: isDemoMode(),
+      analysisProvider: runtime.analysisProvider,
+      analysisModel: runtime.analysisModel,
     });
     return Response.json(
       { jobId, accessToken: token, status: "validating", expiresAt: new Date(expiresAt).toISOString(), demoMode: isDemoMode() },
@@ -43,7 +46,7 @@ export async function POST(request: Request) {
     );
   } catch (error) {
     const code = error instanceof Error ? error.message : "create_job_failed";
-    const known = ["service_paused_low_credit", "service_temporarily_unavailable", "invalid_api_key", "insufficient_credits", "model_policy_error"];
+    const known = ["provider_not_configured", "service_temporarily_unavailable", "invalid_api_key", "model_policy_error"];
     return Response.json({ error: known.includes(code) ? code : "create_job_failed" }, { status: known.includes(code) ? 503 : 500 });
   }
 }

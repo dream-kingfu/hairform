@@ -1,5 +1,5 @@
 export const MODEL_POLICY = {
-  version: "single-preview-v1" as const,
+  version: "text-first-v1" as const,
   analysis: { model: "gpt-5-6-terra", reasoning: "medium", perJobLimit: 1 },
   quality: { model: "gpt-5-6-luna", reasoning: "low", perJobLimit: 2 },
   qualityEscalation: { model: "gpt-5-6-terra", reasoning: "low", perJobLimit: 1 },
@@ -14,6 +14,12 @@ export interface ModelPolicyBindings {
   KIE_QC_MODEL?: string;
   KIE_IMAGE_MODEL?: string;
 }
+
+export const ANALYSIS_MODEL_ALLOWLIST = {
+  kie: "gpt-5-6-terra",
+  qwen: "qwen3.6-flash",
+  glm: "glm-4.6v-flash",
+} as const;
 
 export function modelFor(purpose: ModelPurpose) {
   if (purpose === "analysis") return MODEL_POLICY.analysis.model;
@@ -37,4 +43,11 @@ export function assertProductionModelPolicy(bindings: ModelPolicyBindings) {
     && (!bindings.KIE_QC_MODEL || bindings.KIE_QC_MODEL === MODEL_POLICY.quality.model)
     && (!bindings.KIE_IMAGE_MODEL || bindings.KIE_IMAGE_MODEL === MODEL_POLICY.imageEdit.model);
   if (!valid) throw new Error("model_policy_error");
+}
+
+export function assertAnalysisModelPolicy(provider: string, model: string) {
+  if (!(provider in ANALYSIS_MODEL_ALLOWLIST)
+    || ANALYSIS_MODEL_ALLOWLIST[provider as keyof typeof ANALYSIS_MODEL_ALLOWLIST] !== model) {
+    throw new Error("model_policy_error");
+  }
 }

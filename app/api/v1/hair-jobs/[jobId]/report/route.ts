@@ -8,7 +8,7 @@ export async function POST(request: Request, context: Context) {
   const { jobId } = await context.params;
   const job = await authorizeJob(request, jobId);
   if (!job) return Response.json({ error: "job_not_found" }, { status: 404 });
-  if (job.status !== "compositing") return Response.json({ error: "job_not_ready" }, { status: 409 });
+  if (!["analysis_ready", "compositing", "completed", "partial"].includes(job.status)) return Response.json({ error: "job_not_ready" }, { status: 409 });
   const form = await request.formData();
   const report = form.get("report");
   const preview = form.get("preview");
@@ -25,9 +25,10 @@ export async function POST(request: Request, context: Context) {
     putAsset(previewKey, await preview.arrayBuffer(), "image/webp"),
   ]);
   const hasFailures = parseAssets(job).some((asset) => asset.status === "failed");
-  await updateJob(jobId, { status: hasFailures ? "partial" : "completed", progress: 100, reportKey, previewKey });
+  const status = job.selected_asset_id ? (hasFailures ? "partial" : "completed") : "analysis_ready";
+  await updateJob(jobId, { status, progress: 100, reportKey, previewKey });
   return Response.json({
-    status: hasFailures ? "partial" : "completed",
+    status,
     reportUrl: `/api/v1/hair-jobs/${jobId}/assets/report`,
     previewUrl: `/api/v1/hair-jobs/${jobId}/assets/report_preview`,
   });

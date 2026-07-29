@@ -10,7 +10,7 @@ export async function POST(request: Request, context: Context) {
   const { jobId } = await context.params;
   const job = await authorizeJob(request, jobId);
   if (!job) return Response.json({ error: "job_not_found" }, { status: 404 });
-  if (job.status !== "compositing") return Response.json({ error: "job_not_ready" }, { status: 409 });
+  if (!["analysis_ready", "compositing", "completed", "partial"].includes(job.status)) return Response.json({ error: "job_not_ready" }, { status: 409 });
 
   const form = await request.formData();
   const kind = form.get("kind");
@@ -31,9 +31,10 @@ export async function POST(request: Request, context: Context) {
   if (!current) return Response.json({ error: "job_not_found" }, { status: 404 });
   if (current.report_key && current.preview_key) {
     const hasFailures = parseAssets(current).some((asset) => asset.status === "failed");
-    await updateJob(jobId, { status: hasFailures ? "partial" : "completed", progress: 100 });
+    const hasRequestedPreview = Boolean(current.selected_asset_id);
+    await updateJob(jobId, { status: hasRequestedPreview ? (hasFailures ? "partial" : "completed") : "analysis_ready", progress: 100 });
     current = await getJob(jobId);
   }
 
-  return Response.json(current ? toJobView(current) : { error: "job_not_found" });
+  return Response.json(current ? await toJobView(current) : { error: "job_not_found" });
 }

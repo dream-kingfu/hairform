@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import type { AssetId, HairAnalysis, HairJobView, JobAsset, JobStatus } from "@/lib/hair/types";
+import type { AnalysisProvider, AssetId, HairAnalysis, HairJobView, JobAsset, JobStatus } from "@/lib/hair/types";
 import { buildHairPresentation } from "@/lib/hair/presentation";
 
 interface RuntimeBindings {
@@ -13,6 +13,13 @@ interface RuntimeBindings {
   KIE_ANALYSIS_MODEL?: string;
   KIE_QC_MODEL?: string;
   KIE_IMAGE_MODEL?: string;
+  QWEN_API_KEY?: string;
+  QWEN_API_BASE?: string;
+  GLM_API_KEY?: string;
+  GLM_API_BASE?: string;
+  ADMIN_PASSWORD_HASH?: string;
+  ADMIN_PASSWORD_VERSION?: string;
+  ADMIN_SESSION_SECRET?: string;
   ANALYSIS_MODEL?: string;
   IMAGE_MODEL?: string;
   DEMO_MODE?: string;
@@ -57,6 +64,8 @@ export interface StoredJob {
   qc_terra_calls: number;
   provider_task_id: string | null;
   provider_task_attempt: number;
+  analysis_provider: AnalysisProvider;
+  analysis_model: string;
 }
 
 export const bindings = env as unknown as RuntimeBindings;
@@ -121,6 +130,42 @@ export async function ensureSchema() {
       updated_at INTEGER NOT NULL,
       expires_at INTEGER NOT NULL
     )`),
+    bindings.DB.prepare(`CREATE TABLE IF NOT EXISTS ai_runtime_config (
+      id INTEGER PRIMARY KEY,
+      analysis_provider TEXT NOT NULL DEFAULT 'kie',
+      analysis_model TEXT NOT NULL DEFAULT 'gpt-5-6-terra',
+      image_preview_enabled INTEGER NOT NULL DEFAULT 0,
+      revision INTEGER NOT NULL DEFAULT 1,
+      updated_at INTEGER NOT NULL
+    )`),
+    bindings.DB.prepare(`CREATE TABLE IF NOT EXISTS provider_health (
+      provider_id TEXT PRIMARY KEY,
+      status TEXT NOT NULL,
+      latency_ms INTEGER,
+      error_code TEXT,
+      tested_at INTEGER NOT NULL
+    )`),
+    bindings.DB.prepare(`CREATE TABLE IF NOT EXISTS admin_sessions (
+      token_hash TEXT PRIMARY KEY,
+      csrf_hash TEXT NOT NULL,
+      password_version TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      last_active_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL
+    )`),
+    bindings.DB.prepare(`CREATE TABLE IF NOT EXISTS admin_audit_log (
+      id TEXT PRIMARY KEY,
+      action TEXT NOT NULL,
+      provider_id TEXT,
+      details_json TEXT NOT NULL DEFAULT '{}',
+      ip_fingerprint TEXT,
+      created_at INTEGER NOT NULL
+    )`),
+    bindings.DB.prepare("CREATE INDEX IF NOT EXISTS admin_audit_created_idx ON admin_audit_log (created_at)"),
+    bindings.DB.prepare(`INSERT INTO ai_runtime_config (
+      id, analysis_provider, analysis_model, image_preview_enabled, revision, updated_at
+    ) VALUES (1, 'kie', 'gpt-5-6-terra', 0, 1, ?)
+    ON CONFLICT(id) DO NOTHING`).bind(Date.now()),
   ]);
   const columns = await bindings.DB.prepare("PRAGMA table_info(hair_jobs)").all<{ name: string }>();
   const additions = [
@@ -133,6 +178,8 @@ export async function ensureSchema() {
     ["qc_terra_calls", "ALTER TABLE hair_jobs ADD COLUMN qc_terra_calls INTEGER NOT NULL DEFAULT 0"],
     ["provider_task_id", "ALTER TABLE hair_jobs ADD COLUMN provider_task_id TEXT"],
     ["provider_task_attempt", "ALTER TABLE hair_jobs ADD COLUMN provider_task_attempt INTEGER NOT NULL DEFAULT 0"],
+    ["analysis_provider", "ALTER TABLE hair_jobs ADD COLUMN analysis_provider TEXT NOT NULL DEFAULT 'kie'"],
+    ["analysis_model", "ALTER TABLE hair_jobs ADD COLUMN analysis_model TEXT NOT NULL DEFAULT 'gpt-5-6-terra'"],
   ] as const;
   for (const [name, sql] of additions) {
     if (!columns.results.some((column) => column.name === name)) await bindings.DB.prepare(sql).run();
@@ -196,15 +243,17 @@ export async function insertJob(input: {
   originalKey: string;
   maskKey?: string;
   demoMode: boolean;
+  analysisProvider: AnalysisProvider;
+  analysisModel: string;
 }) {
   await ensureSchema();
   const now = Date.now();
   const expiresAt = now + DAY_MS;
   await bindings.DB.prepare(`INSERT INTO hair_jobs (
     id, token_hash, status, progress, original_key, mask_key, assets_json,
-    demo_mode, generation_policy, created_at, updated_at, expires_at
-  ) VALUES (?, ?, 'validating', 4, ?, ?, ?, ?, 'single-preview-v1', ?, ?, ?)`)
-    .bind(input.id, input.tokenHash, input.originalKey, input.maskKey ?? null, JSON.stringify(DEFAULT_ASSETS), input.demoMode ? 1 : 0, now, now, expiresAt)
+    demo_mode, generation_policy, analysis_provider, analysis_model, created_at, updated_at, expires_at
+  ) VALUES (?, ?, 'validating', 4, ?, ?, ?, ?, 'text-first-v1', ?, ?, ?, ?, ?)`)
+    .bind(input.id, input.tokenHash, input.originalKey, input.maskKey ?? null, JSON.stringify(DEFAULT_ASSETS), input.demoMode ? 1 : 0, input.analysisProvider, input.analysisModel, now, now, expiresAt)
     .run();
   return { expiresAt };
 }
@@ -276,8 +325,8 @@ export async function claimGenerationJob(jobId: string, assetId: "best_short" | 
   return bindings.DB.prepare(`UPDATE hair_jobs SET
     status = 'generating', progress = 42, selected_asset_id = ?, provider_task_id = NULL,
     provider_task_attempt = 0, work_lock_until = ?, updated_at = ?
-    WHERE id = ? AND generation_policy = 'single-preview-v1'
-      AND status = 'awaiting_selection' AND selected_asset_id IS NULL
+    WHERE id = ? AND generation_policy IN ('single-preview-v1', 'text-first-v1')
+      AND status IN ('analysis_ready', 'awaiting_selection', 'completed', 'partial') AND selected_asset_id IS NULL
       AND (work_lock_until IS NULL OR work_lock_until <= ?)
     RETURNING *`)
     .bind(assetId, now + WORK_LOCK_MS, now, jobId, now)
@@ -333,7 +382,38 @@ export function parseAssets(job: StoredJob): JobAsset[] {
   catch { return job.generation_policy === "single-preview-v1" ? DEFAULT_ASSETS : LEGACY_ASSETS; }
 }
 
-export function toJobView(job: StoredJob): HairJobView {
+export interface RuntimeAiConfig {
+  analysisProvider: AnalysisProvider;
+  analysisModel: string;
+  imagePreviewEnabled: boolean;
+  revision: number;
+  updatedAt: number;
+}
+
+export const PROVIDER_MODELS: Record<AnalysisProvider, string> = {
+  kie: "gpt-5-6-terra",
+  qwen: "qwen3.6-flash",
+  glm: "glm-4.6v-flash",
+};
+
+export async function getRuntimeAiConfig(): Promise<RuntimeAiConfig> {
+  await ensureSchema();
+  const row = await bindings.DB.prepare("SELECT * FROM ai_runtime_config WHERE id = 1")
+    .first<{ analysis_provider: string; analysis_model: string; image_preview_enabled: number; revision: number; updated_at: number }>();
+  const analysisProvider = row && ["kie", "qwen", "glm"].includes(row.analysis_provider)
+    ? row.analysis_provider as AnalysisProvider
+    : "kie";
+  return {
+    analysisProvider,
+    analysisModel: PROVIDER_MODELS[analysisProvider],
+    imagePreviewEnabled: Boolean(row?.image_preview_enabled),
+    revision: row?.revision ?? 1,
+    updatedAt: row?.updated_at ?? Date.now(),
+  };
+}
+
+export async function toJobView(job: StoredJob): Promise<HairJobView> {
+  const runtime = await getRuntimeAiConfig();
   const analysis = job.analysis_json ? JSON.parse(job.analysis_json) as HairAnalysis : undefined;
   const assets = parseAssets(job).map((asset) => ({
     ...asset,
@@ -353,14 +433,17 @@ export function toJobView(job: StoredJob): HairJobView {
     errorCode: job.error_code ?? undefined,
     presentation: analysis ? buildHairPresentation(analysis) : undefined,
     generationPolicy: {
-      version: job.generation_policy === "single-preview-v1" ? "single-preview-v1" : "legacy-six-v1",
+      version: job.generation_policy === "text-first-v1" ? "text-first-v1" : job.generation_policy === "single-preview-v1" ? "single-preview-v1" : "legacy-six-v1",
       selectableAssetIds: ["best_short", "best_medium", "best_long"],
       selectedAssetId: ["best_short", "best_medium", "best_long"].includes(job.selected_asset_id ?? "")
         ? job.selected_asset_id as "best_short" | "best_medium" | "best_long"
         : undefined,
       imageCallsUsed: job.image_calls ?? 0,
-      imageCallsLimit: job.generation_policy === "single-preview-v1" ? 2 : 12,
+      imageCallsLimit: ["single-preview-v1", "text-first-v1"].includes(job.generation_policy ?? "") ? 2 : 12,
+      imagePreviewAvailable: runtime.imagePreviewEnabled,
     },
+    analysisProvider: job.analysis_provider,
+    analysisModel: job.analysis_model,
   };
 }
 
@@ -403,6 +486,9 @@ export async function cleanupExpiredJobs() {
     .bind(Date.now())
     .run();
   await bindings.DB.prepare("DELETE FROM service_state WHERE expires_at <= ?")
+    .bind(Date.now())
+    .run();
+  await bindings.DB.prepare("DELETE FROM admin_sessions WHERE expires_at <= ?")
     .bind(Date.now())
     .run();
 }

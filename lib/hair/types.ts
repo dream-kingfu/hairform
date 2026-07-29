@@ -17,9 +17,11 @@ export type ForeheadRatio = "short" | "balanced" | "long" | "unknown";
 export type SkinUndertone = "warm" | "cool" | "neutral" | "unknown";
 export type HairSlot = "best_short" | "best_medium" | "best_long" | "less_suitable";
 export type AssetId = HairSlot | "color_primary" | "color_secondary";
+export type AnalysisProvider = "kie" | "qwen" | "glm";
 export type JobStatus =
   | "validating"
   | "analyzing"
+  | "analysis_ready"
   | "awaiting_selection"
   | "generating"
   | "compositing"
@@ -80,12 +82,15 @@ export interface HairJobView {
   errorCode?: string;
   presentation?: HairJobPresentation;
   generationPolicy?: {
-    version: "single-preview-v1" | "legacy-six-v1";
+    version: "text-first-v1" | "single-preview-v1" | "legacy-six-v1";
     selectableAssetIds: Array<"best_short" | "best_medium" | "best_long">;
     selectedAssetId?: "best_short" | "best_medium" | "best_long";
     imageCallsUsed: number;
     imageCallsLimit: number;
+    imagePreviewAvailable: boolean;
   };
+  analysisProvider?: AnalysisProvider;
+  analysisModel?: string;
 }
 
 export interface BilingualLabel {
