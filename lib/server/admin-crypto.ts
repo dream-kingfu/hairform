@@ -19,7 +19,7 @@ function secureEqual(left: Uint8Array, right: Uint8Array) {
   return difference === 0;
 }
 
-export async function createPasswordHash(password: string, iterations = 310_000) {
+export async function createPasswordHash(password: string, iterations = 100_000) {
   const salt = new Uint8Array(18); crypto.getRandomValues(salt);
   const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
   const derived = new Uint8Array(await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt, iterations }, key, 256));
@@ -27,21 +27,16 @@ export async function createPasswordHash(password: string, iterations = 310_000)
 }
 
 export async function verifyPasswordHash(password: string, encoded?: string) {
-  const safeEncoded = encoded || "pbkdf2_sha256_hex:310000:000000000000000000000000000000000000:0000000000000000000000000000000000000000000000000000000000000000";
+  const safeEncoded = encoded || "pbkdf2_sha256_hex:100000:000000000000000000000000000000000000:0000000000000000000000000000000000000000000000000000000000000000";
   const separator = safeEncoded.includes(":") ? ":" : "$";
   const [algorithm, iterationsText, saltText, expectedText] = safeEncoded.split(separator);
   if (!["pbkdf2_sha256", "pbkdf2_sha256_hex"].includes(algorithm) || !iterationsText || !saltText || !expectedText) return false;
   const iterations = Number(iterationsText);
-  if (!Number.isInteger(iterations) || iterations < 100_000 || iterations > 1_000_000) return false;
+  if (!Number.isInteger(iterations) || iterations !== 100_000) return false;
   try {
     const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
     const decode = algorithm === "pbkdf2_sha256_hex" ? hexToBytes : base64ToBytes;
     const actual = new Uint8Array(await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: decode(saltText), iterations }, key, 256));
     return Boolean(encoded) && secureEqual(actual, decode(expectedText));
-  } catch (error) {
-    console.error("admin_password_hash_verify_error", {
-      reason: error instanceof Error ? error.message : "unknown",
-    });
-    return false;
-  }
+  } catch { return false; }
 }

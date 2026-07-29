@@ -10,7 +10,7 @@ if (password.length < 12) {
   process.exitCode = 1;
 } else {
   const salt = randomBytes(18);
-  const iterations = 310000;
+  const iterations = 100000;
   const digest = pbkdf2Sync(password, salt, iterations, 32, "sha256");
   console.log(`pbkdf2_sha256_hex:${iterations}:${salt.toString("hex")}:${digest.toString("hex")}`);
 }

@@ -83,14 +83,6 @@ export async function loginAdmin(request: Request, password: string) {
     throw new Error("admin_login_locked");
   }
   if (!(await verifyPassword(password))) {
-    const configuredHash = bindings.ADMIN_PASSWORD_HASH || "";
-    console.error("admin_password_invalid_detail", {
-      passwordLength: password.length,
-      hashLength: configuredHash.length,
-      hashFormat: configuredHash.split(/[:$]/, 1)[0] || "missing",
-      passwordFingerprint: (await sessionHash(password)).slice(0, 12),
-      hashFingerprint: (await sessionHash(configuredHash)).slice(0, 12),
-    });
     await recordLoginFailure(fingerprint);
     await writeAdminAudit("login_failed", { details: { reason: "invalid" }, ipFingerprint: fingerprint });
     throw new Error("admin_password_invalid");
