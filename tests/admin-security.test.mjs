@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 
 test("admin password uses PBKDF2 SHA-256 and rejects incorrect passwords", async () => {
   const encoded = await createPasswordHash("a-long-test-password", 100000);
-  assert.match(encoded, /^pbkdf2_sha256:100000:/);
+  assert.match(encoded, /^pbkdf2_sha256_hex:100000:/);
   assert.equal(await verifyPasswordHash("a-long-test-password", encoded), true);
   assert.equal(await verifyPasswordHash("wrong-password", encoded), false);
   assert.equal(await verifyPasswordHash("anything", undefined), false);
