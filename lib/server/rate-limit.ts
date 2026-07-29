@@ -1,4 +1,5 @@
 import { bindings, ensureSchema } from "./jobs";
+import { isRateLimitAllowlisted } from "./rate-limit-policy";
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
@@ -80,6 +81,16 @@ async function consumeFirstBlocked(checks: Array<{
 }
 
 export async function consumeNewJobLimit(request: Request) {
+  const address = clientAddress(request);
+  if (isRateLimitAllowlisted(address, bindings.RATE_LIMIT_IP_ALLOWLIST)) {
+    return consumeFirstBlocked([{
+      scope: "global_jobs",
+      key: "jobs:global:day",
+      units: 1,
+      limit: boundedInteger(bindings.MAX_GLOBAL_JOBS_PER_DAY, 100, 1, 100_000),
+      duration: DAY_MS,
+    }]);
+  }
   const visitor = await fingerprint(request);
   return consumeFirstBlocked([
     {
@@ -124,6 +135,16 @@ export async function consumeModelCallLimit(kind: "analysis" | "image" | "qualit
 }
 
 export async function consumeRetryLimit(request: Request, units: number) {
+  const address = clientAddress(request);
+  if (isRateLimitAllowlisted(address, bindings.RATE_LIMIT_IP_ALLOWLIST)) {
+    return consumeFirstBlocked([{
+      scope: "global_generation",
+      key: "generation:global:day",
+      units,
+      limit: boundedInteger(bindings.MAX_GENERATION_UNITS_PER_DAY, 600, 6, 100_000),
+      duration: DAY_MS,
+    }]);
+  }
   const visitor = await fingerprint(request);
   return consumeFirstBlocked([
     {

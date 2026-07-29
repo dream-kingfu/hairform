@@ -17,6 +17,7 @@ interface RuntimeBindings {
   IMAGE_MODEL?: string;
   DEMO_MODE?: string;
   RATE_LIMIT_SALT?: string;
+  RATE_LIMIT_IP_ALLOWLIST?: string;
   MAX_JOBS_PER_HOUR?: string;
   MAX_JOBS_PER_DAY?: string;
   MAX_RETRIES_PER_HOUR?: string;
