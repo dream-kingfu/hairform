@@ -5,6 +5,8 @@ import test from "node:test";
 const providerSource = await readFile(new URL("../lib/server/openai.ts", import.meta.url), "utf8");
 const policySource = await readFile(new URL("../lib/server/model-policy.ts", import.meta.url), "utf8");
 const jobsSource = await readFile(new URL("../lib/server/jobs.ts", import.meta.url), "utf8");
+const processorSource = await readFile(new URL("../lib/server/processor.ts", import.meta.url), "utf8");
+const jobRouteSource = await readFile(new URL("../app/api/v1/hair-jobs/[jobId]/route.ts", import.meta.url), "utf8");
 const envExample = await readFile(new URL("../.env.example", import.meta.url), "utf8");
 
 test("uses Kie file upload and asynchronous GPT Image 2 task APIs", () => {
@@ -19,6 +21,11 @@ test("uses Kie file upload and asynchronous GPT Image 2 task APIs", () => {
   assert.match(providerSource, /downloadKieImage/);
   assert.match(providerSource, /maskUrl \? \[inputUrl, maskUrl\] : \[inputUrl\]/);
   assert.match(providerSource, /binary edit guide/);
+  assert.match(providerSource, /pollKieImageTask/);
+  assert.match(processorSource, /beginKiePortraitEdit/);
+  assert.match(processorSource, /providerTaskId/);
+  assert.match(jobRouteSource, /advanceSelectedGeneration/);
+  assert.match(jobsSource, /provider_task_id/);
   assert.match(providerSource, /const fallback = isKie\(\) \? 1 : 3/);
 });
 

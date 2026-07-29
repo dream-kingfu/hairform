@@ -54,6 +54,8 @@ export interface StoredJob {
   image_calls: number;
   qc_luna_calls: number;
   qc_terra_calls: number;
+  provider_task_id: string | null;
+  provider_task_attempt: number;
 }
 
 export const bindings = env as unknown as RuntimeBindings;
@@ -100,7 +102,9 @@ export async function ensureSchema() {
       analysis_calls INTEGER NOT NULL DEFAULT 0,
       image_calls INTEGER NOT NULL DEFAULT 0,
       qc_luna_calls INTEGER NOT NULL DEFAULT 0,
-      qc_terra_calls INTEGER NOT NULL DEFAULT 0
+      qc_terra_calls INTEGER NOT NULL DEFAULT 0,
+      provider_task_id TEXT,
+      provider_task_attempt INTEGER NOT NULL DEFAULT 0
     )`),
     bindings.DB.prepare("CREATE INDEX IF NOT EXISTS hair_jobs_expires_idx ON hair_jobs (expires_at)"),
     bindings.DB.prepare(`CREATE TABLE IF NOT EXISTS rate_limit_buckets (
@@ -126,6 +130,8 @@ export async function ensureSchema() {
     ["image_calls", "ALTER TABLE hair_jobs ADD COLUMN image_calls INTEGER NOT NULL DEFAULT 0"],
     ["qc_luna_calls", "ALTER TABLE hair_jobs ADD COLUMN qc_luna_calls INTEGER NOT NULL DEFAULT 0"],
     ["qc_terra_calls", "ALTER TABLE hair_jobs ADD COLUMN qc_terra_calls INTEGER NOT NULL DEFAULT 0"],
+    ["provider_task_id", "ALTER TABLE hair_jobs ADD COLUMN provider_task_id TEXT"],
+    ["provider_task_attempt", "ALTER TABLE hair_jobs ADD COLUMN provider_task_attempt INTEGER NOT NULL DEFAULT 0"],
   ] as const;
   for (const [name, sql] of additions) {
     if (!columns.results.some((column) => column.name === name)) await bindings.DB.prepare(sql).run();
@@ -211,12 +217,15 @@ export async function updateJob(jobId: string, patch: {
   previewKey?: string | null;
   errorCode?: string | null;
   workLockUntil?: number | null;
+  providerTaskId?: string | null;
+  providerTaskAttempt?: number;
 }) {
   const current = await getJob(jobId);
   if (!current) throw new Error("job_not_found");
   await bindings.DB.prepare(`UPDATE hair_jobs SET
     status = ?, progress = ?, analysis_json = ?, assets_json = ?, report_key = ?,
-    preview_key = ?, error_code = ?, work_lock_until = ?, updated_at = ? WHERE id = ?`)
+    preview_key = ?, error_code = ?, work_lock_until = ?, provider_task_id = ?,
+    provider_task_attempt = ?, updated_at = ? WHERE id = ?`)
     .bind(
       patch.status ?? current.status,
       patch.progress ?? current.progress,
@@ -226,6 +235,8 @@ export async function updateJob(jobId: string, patch: {
       patch.previewKey === undefined ? current.preview_key : patch.previewKey,
       patch.errorCode === undefined ? current.error_code : patch.errorCode,
       patch.workLockUntil === undefined ? current.work_lock_until : patch.workLockUntil,
+      patch.providerTaskId === undefined ? current.provider_task_id : patch.providerTaskId,
+      patch.providerTaskAttempt ?? current.provider_task_attempt,
       Date.now(),
       jobId,
     )
@@ -262,12 +273,24 @@ export async function claimGenerationJob(jobId: string, assetId: "best_short" | 
   await ensureSchema();
   const now = Date.now();
   return bindings.DB.prepare(`UPDATE hair_jobs SET
-    status = 'generating', progress = 42, selected_asset_id = ?, work_lock_until = ?, updated_at = ?
+    status = 'generating', progress = 42, selected_asset_id = ?, provider_task_id = NULL,
+    provider_task_attempt = 0, work_lock_until = ?, updated_at = ?
     WHERE id = ? AND generation_policy = 'single-preview-v1'
       AND status = 'awaiting_selection' AND selected_asset_id IS NULL
       AND (work_lock_until IS NULL OR work_lock_until <= ?)
     RETURNING *`)
     .bind(assetId, now + WORK_LOCK_MS, now, jobId, now)
+    .first<StoredJob>();
+}
+
+export async function claimGenerationPoll(jobId: string) {
+  await ensureSchema();
+  const now = Date.now();
+  return bindings.DB.prepare(`UPDATE hair_jobs SET work_lock_until = ?, updated_at = ?
+    WHERE id = ? AND status = 'generating' AND provider_task_id IS NOT NULL
+      AND (work_lock_until IS NULL OR work_lock_until <= ?)
+    RETURNING *`)
+    .bind(now + 60_000, now, jobId, now)
     .first<StoredJob>();
 }
 
@@ -292,7 +315,7 @@ export async function reserveJobCall(jobId: string, kind: JobCallKind, limit: nu
 export async function failJobWork(jobId: string, errorCode: string) {
   await ensureSchema();
   await bindings.DB.prepare(`UPDATE hair_jobs SET
-    status = 'failed', error_code = ?, work_lock_until = NULL, updated_at = ?
+    status = 'failed', error_code = ?, work_lock_until = NULL, provider_task_id = NULL, updated_at = ?
     WHERE id = ?`)
     .bind(errorCode, Date.now(), jobId)
     .run();

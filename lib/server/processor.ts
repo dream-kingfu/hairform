@@ -1,6 +1,6 @@
 import type { AssetId, HairAnalysis, JobAsset } from "@/lib/hair/types";
 import { MODEL_POLICY } from "./model-policy";
-import { analyzePortrait, editPortrait, generationBatchSize, qualityCheck, safeErrorCode, type QualityCheckResult } from "./openai";
+import { analyzePortrait, beginKiePortraitEdit, editPortrait, generationBatchSize, pollKieImageTask, qualityCheck, safeErrorCode, type QualityCheckResult } from "./openai";
 import { consumeModelCallLimit } from "./rate-limit";
 import { assetKey, bindings, getJob, isDemoMode, parseAssets, putAsset, reserveJobCall, updateJob, type StoredJob } from "./jobs";
 
@@ -67,34 +67,95 @@ export async function generateSelected(job: StoredJob, id: "best_short" | "best_
   const { image, contentType, mask } = await sourceBytes(job);
   let assets = parseAssets(job).map((asset) => asset.id === id ? { ...asset, status: "generating" as const, errorCode: undefined } : asset);
   await updateJob(job.id, { status: "generating", progress: 46, assets, reportKey: null, previewKey: null, errorCode: null });
+  if (isDemoMode()) {
+    const output = await editPortrait({ id, image, contentType, analysis });
+    await putAsset(assetKey(job.id, id), output.bytes, output.contentType);
+    assets = assets.map((asset) => asset.id === id ? { ...asset, status: "ready" as const, errorCode: undefined } : asset);
+    await updateJob(job.id, { status: "compositing", progress: 92, assets, errorCode: null, workLockUntil: null });
+    return getJob(job.id);
+  }
+  const used = await reserveCall(job.id, "image", MODEL_POLICY.imageEdit.perJobLimit, "image_call_limit_reached");
+  const taskId = await beginKiePortraitEdit({ id, image, contentType, analysis, mask: used > 1 ? mask : undefined });
+  await updateJob(job.id, {
+    status: "generating",
+    progress: 52,
+    assets,
+    providerTaskId: taskId,
+    providerTaskAttempt: used,
+    workLockUntil: null,
+  });
+  return getJob(job.id);
+}
 
-  let lastError: unknown = new Error("generation_failed");
-  for (let attempt = job.image_calls ?? 0; attempt < MODEL_POLICY.imageEdit.perJobLimit; attempt += 1) {
+export async function advanceSelectedGeneration(job: StoredJob) {
+  const id = job.selected_asset_id as "best_short" | "best_medium" | "best_long" | null;
+  if (!id || !job.analysis_json || !job.provider_task_id) {
+    await updateJob(job.id, { workLockUntil: null });
+    return getJob(job.id);
+  }
+  const analysis = JSON.parse(job.analysis_json) as HairAnalysis;
+  const task = await pollKieImageTask(job.provider_task_id);
+  if (task.state === "pending") {
+    await updateJob(job.id, { progress: Math.min(84, 52 + Math.max(1, job.provider_task_attempt) * 8), workLockUntil: null });
+    return getJob(job.id);
+  }
+
+  let lastError: unknown = task.state === "failed" ? new Error(task.errorCode) : new Error("quality_check_failed");
+  if (task.state === "ready") {
+    const { image, contentType } = await sourceBytes(job);
     try {
-      const used = await reserveCall(job.id, "image", MODEL_POLICY.imageEdit.perJobLimit, "image_call_limit_reached");
-      const output = await editPortrait({ id, image, contentType, analysis, mask: used > 1 ? mask : undefined });
       const ok = await runQualityCheck({
         id,
         original: image,
-        output: output.bytes,
-        outputType: output.contentType,
+        output: task.bytes,
+        outputType: task.contentType,
         originalType: contentType,
         analysis,
       }, job.id);
       if (!ok) throw new Error("quality_check_failed");
-      await putAsset(assetKey(job.id, id), output.bytes, output.contentType);
-      assets = assets.map((asset) => asset.id === id ? { ...asset, status: "ready" as const, errorCode: undefined } : asset);
-      await updateJob(job.id, { status: "compositing", progress: 92, assets, errorCode: null, workLockUntil: null });
+      await putAsset(assetKey(job.id, id), task.bytes, task.contentType);
+      const assets = parseAssets(job).map((asset) => asset.id === id ? { ...asset, status: "ready" as const, errorCode: undefined } : asset);
+      await updateJob(job.id, {
+        status: "compositing",
+        progress: 92,
+        assets,
+        errorCode: null,
+        providerTaskId: null,
+        workLockUntil: null,
+      });
       return getJob(job.id);
     } catch (error) {
       lastError = error;
-      if (error instanceof Error && error.message === "quality_service_failed") break;
-      const current = await getJob(job.id);
-      if ((current?.image_calls ?? MODEL_POLICY.imageEdit.perJobLimit) >= MODEL_POLICY.imageEdit.perJobLimit) break;
     }
   }
-  assets = assets.map((asset) => asset.id === id ? { ...asset, status: "failed" as const, errorCode: safeErrorCode(lastError) } : asset);
-  await updateJob(job.id, { status: "failed", progress: 100, assets, errorCode: safeErrorCode(lastError), workLockUntil: null });
+
+  const current = await getJob(job.id);
+  if (lastError instanceof Error && lastError.message !== "quality_service_failed"
+    && (current?.image_calls ?? MODEL_POLICY.imageEdit.perJobLimit) < MODEL_POLICY.imageEdit.perJobLimit) {
+    const { image, contentType, mask } = await sourceBytes(current ?? job);
+    const used = await reserveCall(job.id, "image", MODEL_POLICY.imageEdit.perJobLimit, "image_call_limit_reached");
+    const taskId = await beginKiePortraitEdit({ id, image, contentType, analysis, mask });
+    await updateJob(job.id, {
+      status: "generating",
+      progress: 68,
+      providerTaskId: taskId,
+      providerTaskAttempt: used,
+      workLockUntil: null,
+      errorCode: null,
+    });
+    return getJob(job.id);
+  }
+
+  const code = safeErrorCode(lastError);
+  const assets = parseAssets(current ?? job).map((asset) => asset.id === id ? { ...asset, status: "failed" as const, errorCode: code } : asset);
+  await updateJob(job.id, {
+    status: "failed",
+    progress: 100,
+    assets,
+    errorCode: code,
+    providerTaskId: null,
+    workLockUntil: null,
+  });
   return getJob(job.id);
 }
 

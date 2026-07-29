@@ -259,26 +259,39 @@ async function createKieImageTask(prompt: string, inputUrls: string[]) {
   return taskId;
 }
 
+export type KieImageTaskResult =
+  | { state: "pending" }
+  | { state: "failed"; errorCode: "moderation_blocked" | "model_request_failed" }
+  | { state: "ready"; bytes: ArrayBuffer; contentType: string };
+
+export async function pollKieImageTask(taskId: string): Promise<KieImageTaskResult> {
+  assertProductionModelPolicy(bindings);
+  const payload = await kieJson(`${bindings.KIE_API_BASE || KIE_DEFAULT_API_BASE}/api/v1/jobs/recordInfo?taskId=${encodeURIComponent(taskId)}`, {
+    method: "GET",
+  });
+  const data = payload.data as Record<string, unknown> | undefined;
+  const state = typeof data?.state === "string" ? data.state : "";
+  if (state === "success") {
+    const result = typeof data?.resultJson === "string" ? JSON.parse(data.resultJson) as Record<string, unknown> : data?.resultJson as Record<string, unknown> | undefined;
+    const urls = result?.resultUrls;
+    const url = Array.isArray(urls) && typeof urls[0] === "string" ? urls[0] : undefined;
+    if (!url) throw new Error("image_output_missing");
+    return { state: "ready", ...await downloadKieImage(url) };
+  }
+  if (state === "fail") {
+    const message = `${data?.failCode ?? ""} ${data?.failMsg ?? ""}`.toLowerCase();
+    return { state: "failed", errorCode: message.includes("moderation") || message.includes("safety") ? "moderation_blocked" : "model_request_failed" };
+  }
+  return { state: "pending" };
+}
+
 async function waitForKieImage(taskId: string) {
   const deadline = Date.now() + 240_000;
   let delay = 2_000;
   while (Date.now() < deadline) {
-    const payload = await kieJson(`${bindings.KIE_API_BASE || KIE_DEFAULT_API_BASE}/api/v1/jobs/recordInfo?taskId=${encodeURIComponent(taskId)}`, {
-      method: "GET",
-    });
-    const data = payload.data as Record<string, unknown> | undefined;
-    const state = typeof data?.state === "string" ? data.state : "";
-    if (state === "success") {
-      const result = typeof data?.resultJson === "string" ? JSON.parse(data.resultJson) as Record<string, unknown> : data?.resultJson as Record<string, unknown> | undefined;
-      const urls = result?.resultUrls;
-      const url = Array.isArray(urls) && typeof urls[0] === "string" ? urls[0] : undefined;
-      if (!url) throw new Error("image_output_missing");
-      return url;
-    }
-    if (state === "fail") {
-      const message = `${data?.failCode ?? ""} ${data?.failMsg ?? ""}`.toLowerCase();
-      throw new Error(message.includes("moderation") || message.includes("safety") ? "moderation_blocked" : "model_request_failed");
-    }
+    const result = await pollKieImageTask(taskId);
+    if (result.state === "ready") return result;
+    if (result.state === "failed") throw new Error(result.errorCode);
     await wait(delay);
     delay = Math.min(5_000, delay + 500);
   }
@@ -398,16 +411,8 @@ export async function editPortrait(input: {
   const color = input.analysis.colors[colorIndex];
   const prompt = style ? hairstylePrompt(style) : colorPrompt(color);
   if (isKie()) {
-    assertProductionModelPolicy(bindings);
-    const inputUrl = await uploadKieImage(input.image, input.contentType);
-    const maskUrl = input.mask ? await uploadKieImage(input.mask, "image/png") : undefined;
-    const taskId = await createKieImageTask(
-      maskUrl
-        ? `${prompt} This is a retry. The second input image is a binary edit guide: change only the white hair region and preserve every black region as closely as possible.`
-        : prompt,
-      maskUrl ? [inputUrl, maskUrl] : [inputUrl],
-    );
-    return downloadKieImage(await waitForKieImage(taskId));
+    const taskId = await beginKiePortraitEdit(input);
+    return await waitForKieImage(taskId);
   }
   const form = new FormData();
   form.append("model", IMAGE_MODEL());
@@ -426,6 +431,28 @@ export async function editPortrait(input: {
   const result = new Uint8Array(binary.length);
   for (let index = 0; index < binary.length; index += 1) result[index] = binary.charCodeAt(index);
   return { bytes: result.buffer, contentType: "image/png" };
+}
+
+export async function beginKiePortraitEdit(input: {
+  id: AssetId;
+  image: ArrayBuffer;
+  contentType: string;
+  analysis: HairAnalysis;
+  mask?: ArrayBuffer;
+}) {
+  assertProductionModelPolicy(bindings);
+  const style = input.analysis.hairstyleSlots.find((item) => item.slot === input.id);
+  const colorIndex = input.id === "color_primary" ? 0 : 1;
+  const color = input.analysis.colors[colorIndex];
+  const prompt = style ? hairstylePrompt(style) : colorPrompt(color);
+  const inputUrl = await uploadKieImage(input.image, input.contentType);
+  const maskUrl = input.mask ? await uploadKieImage(input.mask, "image/png") : undefined;
+  return createKieImageTask(
+    maskUrl
+      ? `${prompt} This is a retry. The second input image is a binary edit guide: change only the white hair region and preserve every black region as closely as possible.`
+      : prompt,
+    maskUrl ? [inputUrl, maskUrl] : [inputUrl],
+  );
 }
 
 export interface QualityCheckResult {

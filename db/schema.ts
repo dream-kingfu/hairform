@@ -26,6 +26,8 @@ export const hairJobs = sqliteTable("hair_jobs", {
   imageCalls: integer("image_calls").notNull().default(0),
   qcLunaCalls: integer("qc_luna_calls").notNull().default(0),
   qcTerraCalls: integer("qc_terra_calls").notNull().default(0),
+  providerTaskId: text("provider_task_id"),
+  providerTaskAttempt: integer("provider_task_attempt").notNull().default(0),
 }, (table) => [index("hair_jobs_expires_idx").on(table.expiresAt)]);
 
 export const rateLimitBuckets = sqliteTable("rate_limit_buckets", {
