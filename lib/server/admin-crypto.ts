@@ -38,5 +38,10 @@ export async function verifyPasswordHash(password: string, encoded?: string) {
     const decode = algorithm === "pbkdf2_sha256_hex" ? hexToBytes : base64ToBytes;
     const actual = new Uint8Array(await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: decode(saltText), iterations }, key, 256));
     return Boolean(encoded) && secureEqual(actual, decode(expectedText));
-  } catch { return false; }
+  } catch (error) {
+    console.error("admin_password_hash_verify_error", {
+      reason: error instanceof Error ? error.message : "unknown",
+    });
+    return false;
+  }
 }
