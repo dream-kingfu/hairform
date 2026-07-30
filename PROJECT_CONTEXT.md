@@ -24,7 +24,7 @@ HAIRFORM 是一个面向普通用户的响应式 H5 与微信原生小程序发�
 - 管理后台：https://hairform-ai.king1018.chatgpt.site/admin
 - GitHub：https://github.com/dream-kingfu/hairform
 - GitHub 默认分支：`main`
-- 当前源码基线提交：`474e202`
+- 当前功能基线提交：`cf073ba`
 - Sites 项目：`型格 HAIRFORM`
 - Sites 项目 ID：`appgprj_6a60f9628f88819183313e7f4f41a60c`
 
@@ -474,6 +474,7 @@ npm test
 | 2026-07-30 | `568c27e` | Add temporary safe password diagnostic fingerprints |
 | 2026-07-30 | `e228e9b` | Diagnose PBKDF2 runtime failure |
 | 2026-07-30 | `474e202` | Respect Sites PBKDF2 runtime limit and remove temporary diagnostics |
+| 2026-07-30 | `cf073ba` | Add select-then-generate hairstyle and hair-color previews |
 
 ### 生产运行配置记录
 
