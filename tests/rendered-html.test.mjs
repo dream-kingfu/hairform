@@ -11,6 +11,9 @@ test("contains the finished HAIRFORM experience", async () => {
   assert.match(app, /先看见/);
   assert.match(app, /上传一张清晰正面照/);
   assert.match(app, /24H PRIVATE/);
+  assert.match(app, /先选后生成/);
+  assert.match(app, /选这款发色/);
+  assert.match(app, /完整真人预览图已排好/);
   assert.doesNotMatch(`${app}\n${layout}`, /codex-preview|SkeletonPreview|Your site is taking shape/);
 });
 

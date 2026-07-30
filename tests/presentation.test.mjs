@@ -20,4 +20,7 @@ test("covers every fixed style and color in the native presentation contract", a
   }
   assert.match(presentation, /recommendation\.slot === "less_suitable" \? undefined/);
   assert.match(presentation, /assetId: index === 0 \? "color_primary"/);
+  assert.match(presentation, /styleAdvice/);
+  assert.match(presentation, /colorAdvice/);
+  assert.match(presentation, /consultantSummary/);
 });

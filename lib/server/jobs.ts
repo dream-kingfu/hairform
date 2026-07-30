@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import type { AnalysisProvider, AssetId, HairAnalysis, HairJobView, JobAsset, JobStatus } from "@/lib/hair/types";
+import type { AnalysisProvider, AssetId, HairAnalysis, HairJobView, JobAsset, JobStatus, PreviewAssetId } from "@/lib/hair/types";
 import { buildHairPresentation } from "@/lib/hair/presentation";
 
 interface RuntimeBindings {
@@ -319,7 +319,7 @@ export async function claimRetryJob(jobId: string) {
     .first<StoredJob>();
 }
 
-export async function claimGenerationJob(jobId: string, assetId: "best_short" | "best_medium" | "best_long") {
+export async function claimGenerationJob(jobId: string, assetId: PreviewAssetId) {
   await ensureSchema();
   const now = Date.now();
   return bindings.DB.prepare(`UPDATE hair_jobs SET
@@ -434,9 +434,9 @@ export async function toJobView(job: StoredJob): Promise<HairJobView> {
     presentation: analysis ? buildHairPresentation(analysis) : undefined,
     generationPolicy: {
       version: job.generation_policy === "text-first-v1" ? "text-first-v1" : job.generation_policy === "single-preview-v1" ? "single-preview-v1" : "legacy-six-v1",
-      selectableAssetIds: ["best_short", "best_medium", "best_long"],
-      selectedAssetId: ["best_short", "best_medium", "best_long"].includes(job.selected_asset_id ?? "")
-        ? job.selected_asset_id as "best_short" | "best_medium" | "best_long"
+      selectableAssetIds: ["best_short", "best_medium", "best_long", "color_primary", "color_secondary"],
+      selectedAssetId: ["best_short", "best_medium", "best_long", "color_primary", "color_secondary"].includes(job.selected_asset_id ?? "")
+        ? job.selected_asset_id as PreviewAssetId
         : undefined,
       imageCallsUsed: job.image_calls ?? 0,
       imageCallsLimit: ["single-preview-v1", "text-first-v1"].includes(job.generation_policy ?? "") ? 2 : 12,

@@ -55,7 +55,9 @@ export async function composeHairReport(job: HairJobView) {
   if (!job.analysis || !job.presentation || !job.originalUrl) throw new Error("job_not_composable");
   const selectedId = job.generationPolicy?.selectedAssetId;
   const selectedAsset = job.assets.find((asset) => asset.id === selectedId && asset.status === "ready" && asset.url);
-  const selected = job.presentation.hairstyles.find((style) => style.assetId === selectedId);
+  const selectedStyle = job.presentation.hairstyles.find((style) => style.assetId === selectedId);
+  const selectedColor = job.presentation.colors.find((color) => color.assetId === selectedId);
+  const selectedLabel = selectedStyle?.styleLabel ?? selectedColor?.label;
   const original = await loadImage(job.originalUrl);
   const preview = selectedAsset?.url ? await loadImage(selectedAsset.url) : undefined;
   const canvas = document.createElement("canvas"); canvas.width = WIDTH; canvas.height = HEIGHT;
@@ -64,12 +66,13 @@ export async function composeHairReport(job: HairJobView) {
   context.fillStyle = INK; context.fillRect(0, 0, WIDTH, 240);
   text(context, "型格", 88, 108, 66, ACID, 850);
   text(context, "HAIRFORM / TEXT-FIRST HAIR REPORT", 88, 172, 25, PAPER, 650);
-  text(context, preview ? "ORIGINAL × PREVIEW" : "ONE ANALYSIS · ZERO IMAGE CALLS", 1590, 142, 21, ACID, 700);
+  text(context, preview ? (selectedColor ? "SELECTED COLOR PREVIEW" : "SELECTED STYLE PREVIEW") : "ONE ANALYSIS · ZERO IMAGE CALLS", 1530, 142, 21, ACID, 700);
 
   if (preview) {
     cover(context, original, 88, 318, 958, 900, 40); cover(context, preview, 1114, 318, 958, 900, 40);
     text(context, "原始肖像 / ORIGINAL", 88, 1260, 23, MUTED, 650);
-    text(context, `${selected?.slotLabel.zh ?? "真人预览"} / ${selected?.slotLabel.en.toUpperCase() ?? "PREVIEW"}`, 1114, 1260, 23, INK, 750);
+    text(context, `${selectedColor ? "所选发色" : "所选发型"}：${selectedLabel?.zh ?? "真人预览"} / ${selectedLabel?.en.toUpperCase() ?? "PREVIEW"}`, 1114, 1260, 23, INK, 750);
+    wrap(context, `发型顾问建议：${job.presentation.consultantSummary.zh}`, 88, 1350, 1984, 22, 30, 1, MUTED, 650);
   } else {
     cover(context, original, 88, 318, 690, 900, 40);
     text(context, "原始肖像 / ORIGINAL", 88, 1260, 23, MUTED, 650);
@@ -91,6 +94,7 @@ export async function composeHairReport(job: HairJobView) {
     context.fillStyle = style.assetId === "less_suitable" ? "#dedbd1" : WHITE; rounded(context, x, y, 938, 260, 28); context.fill();
     bilingual(context, style.slotLabel, x + 30, y + 55, 24); bilingual(context, style.styleLabel, x + 360, y + 58, 34);
     bilingual(context, style.lengthLabel, x + 30, y + 160, 23); bilingual(context, style.fringeLabel, x + 340, y + 160, 23); bilingual(context, style.partLabel, x + 650, y + 160, 23);
+    wrap(context, style.advice.zh, x + 30, y + 225, 865, 18, 24, 1, MUTED, 600);
   });
 
   text(context, "理发师沟通参数", 88, 2185, 50, INK, 850); text(context, "BARBER BRIEFS", 88, 2228, 20, MUTED, 650);
@@ -113,6 +117,7 @@ export async function composeHairReport(job: HairJobView) {
     context.fillStyle = WHITE; rounded(context, x, 3520, 938, 190, 28); context.fill();
     context.fillStyle = color.swatchHex; context.beginPath(); context.arc(x + 92, 3615, 50, 0, Math.PI * 2); context.fill();
     bilingual(context, color.label, x + 175, 3590, 32); bilingual(context, color.levelLabel, x + 635, 3590, 23);
+    wrap(context, color.advice.zh, x + 175, 3686, 720, 17, 22, 1, MUTED, 550);
   });
 
   context.fillStyle = INK; context.fillRect(0, 3770, WIDTH, 70);

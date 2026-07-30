@@ -2,10 +2,11 @@ import { authorizeJob, claimGenerationJob, getJob, getRuntimeAiConfig, parseAsse
 import { safeErrorCode } from "@/lib/server/openai";
 import { generateSelected } from "@/lib/server/processor";
 import { ensureCanGeneratePreview } from "@/lib/server/provider-health";
+import type { PreviewAssetId } from "@/lib/hair/types";
 
 export const dynamic = "force-dynamic";
 type Context = { params: Promise<{ jobId: string }> };
-const SELECTABLE = new Set(["best_short", "best_medium", "best_long"] as const);
+const SELECTABLE = new Set<PreviewAssetId>(["best_short", "best_medium", "best_long", "color_primary", "color_secondary"]);
 
 export async function POST(request: Request, context: Context) {
   const { jobId } = await context.params;
@@ -16,10 +17,10 @@ export async function POST(request: Request, context: Context) {
   if (!runtime.imagePreviewEnabled) return Response.json({ error: "image_preview_disabled" }, { status: 403 });
   const payload = await request.json().catch(() => ({})) as { assetId?: string; model?: unknown };
   if (payload.model !== undefined) return Response.json({ error: "model_not_allowed" }, { status: 400 });
-  if (!payload.assetId || !SELECTABLE.has(payload.assetId as "best_short" | "best_medium" | "best_long")) {
+  if (!payload.assetId || !SELECTABLE.has(payload.assetId as PreviewAssetId)) {
     return Response.json({ error: "asset_not_selectable" }, { status: 400 });
   }
-  const assetId = payload.assetId as "best_short" | "best_medium" | "best_long";
+  const assetId = payload.assetId as PreviewAssetId;
   if (job.selected_asset_id && job.selected_asset_id !== assetId) return Response.json({ error: "selection_locked" }, { status: 409 });
   if (job.selected_asset_id === assetId) {
     const current = await getJob(jobId);

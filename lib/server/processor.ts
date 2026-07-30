@@ -1,4 +1,4 @@
-import type { AssetId, HairAnalysis, JobAsset } from "@/lib/hair/types";
+import type { AssetId, HairAnalysis, JobAsset, PreviewAssetId } from "@/lib/hair/types";
 import { MODEL_POLICY } from "./model-policy";
 import { analyzePortrait, beginKiePortraitEdit, editPortrait, generationBatchSize, pollKieImageTask, qualityCheck, safeErrorCode, type QualityCheckResult } from "./openai";
 import { consumeModelCallLimit } from "./rate-limit";
@@ -62,7 +62,7 @@ export async function analyzeJob(job: StoredJob) {
   return getJob(job.id);
 }
 
-export async function generateSelected(job: StoredJob, id: "best_short" | "best_medium" | "best_long") {
+export async function generateSelected(job: StoredJob, id: PreviewAssetId) {
   if (!job.analysis_json) throw new Error("analysis_required");
   const analysis = JSON.parse(job.analysis_json) as HairAnalysis;
   const { image, contentType, mask } = await sourceBytes(job);
@@ -92,7 +92,7 @@ export async function generateSelected(job: StoredJob, id: "best_short" | "best_
 }
 
 export async function advanceSelectedGeneration(job: StoredJob) {
-  const id = job.selected_asset_id as "best_short" | "best_medium" | "best_long" | null;
+  const id = job.selected_asset_id as PreviewAssetId | null;
   if (!id || !job.analysis_json || !job.provider_task_id) {
     await updateJob(job.id, { workLockUntil: null });
     return getJob(job.id);

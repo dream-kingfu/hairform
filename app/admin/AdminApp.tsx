@@ -127,7 +127,7 @@ export function AdminApp() {
           </div>
         </section>
         <section className="admin-panel preview-control">
-          <div><p className="eyebrow">02 / IMAGE PREVIEW</p><h2>真人发型预览</h2><p>关闭时只生成文字分析、色卡、沟通卡与报告，不产生 Image2 费用。</p></div>
+          <div><p className="eyebrow">02 / IMAGE PREVIEW</p><h2>真人发型 / 发色预览</h2><p>开启后，用户可以先选中一款发型或发色，再确认生成一张真人预览；关闭时只提供文字分析、色卡、沟通卡与报告。</p></div>
           <label className="switch"><input type="checkbox" checked={previewEnabled} onChange={(event) => setPreviewEnabled(event.target.checked)} /><span /><b>{previewEnabled ? "已开启" : "已关闭"}</b></label>
         </section>
         <div className="admin-savebar"><p>配置版本 {dashboard.config.revision} · 切换供应商只影响新任务</p><button className="primary-button" disabled={busy === "save"} onClick={saveConfig}>{busy === "save" ? "正在保存…" : "保存并生效 →"}</button></div>

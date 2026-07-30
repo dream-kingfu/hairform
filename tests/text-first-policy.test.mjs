@@ -34,3 +34,17 @@ test("image preview endpoints fail closed when the global switch is off", () => 
   assert.match(generate, /imagePreviewEnabled/);
   assert.match(generate, /image_preview_disabled/);
 });
+
+test("text-first users can explicitly select a hairstyle or hair color before generation", () => {
+  const generate = readFileSync(new URL("../app/api/v1/hair-jobs/[jobId]/generate/route.ts", import.meta.url), "utf8");
+  const app = readFileSync(new URL("../app/HairApp.tsx", import.meta.url), "utf8");
+  const jobs = readFileSync(new URL("../lib/server/jobs.ts", import.meta.url), "utf8");
+  for (const id of ["best_short", "best_medium", "best_long", "color_primary", "color_secondary"]) {
+    assert.match(generate, new RegExp(id));
+    assert.match(jobs, new RegExp(id));
+  }
+  assert.match(app, /pendingAssetId/);
+  assert.match(app, /选这款发色/);
+  assert.match(app, /生成.*完整预览/);
+  assert.match(app, /\["analysis_ready", "awaiting_selection", "completed", "partial"\]\.includes\(job\.status\)/);
+});

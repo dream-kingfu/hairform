@@ -17,6 +17,7 @@ export type ForeheadRatio = "short" | "balanced" | "long" | "unknown";
 export type SkinUndertone = "warm" | "cool" | "neutral" | "unknown";
 export type HairSlot = "best_short" | "best_medium" | "best_long" | "less_suitable";
 export type AssetId = HairSlot | "color_primary" | "color_secondary";
+export type PreviewAssetId = Exclude<AssetId, "less_suitable">;
 export type AnalysisProvider = "kie" | "qwen" | "glm";
 export type JobStatus =
   | "validating"
@@ -83,8 +84,8 @@ export interface HairJobView {
   presentation?: HairJobPresentation;
   generationPolicy?: {
     version: "text-first-v1" | "single-preview-v1" | "legacy-six-v1";
-    selectableAssetIds: Array<"best_short" | "best_medium" | "best_long">;
-    selectedAssetId?: "best_short" | "best_medium" | "best_long";
+    selectableAssetIds: PreviewAssetId[];
+    selectedAssetId?: PreviewAssetId;
     imageCallsUsed: number;
     imageCallsLimit: number;
     imagePreviewAvailable: boolean;
@@ -112,6 +113,7 @@ export interface HairJobPresentation {
     lengthLabel: BilingualLabel;
     fringeLabel: BilingualLabel;
     partLabel: BilingualLabel;
+    advice: BilingualLabel;
     barberBrief?: BarberBrief;
   }>;
   colors: Array<{
@@ -120,6 +122,8 @@ export interface HairJobPresentation {
     label: BilingualLabel;
     swatchHex: string;
     levelLabel: BilingualLabel;
+    advice: BilingualLabel;
   }>;
   overallStyle: BilingualLabel;
+  consultantSummary: BilingualLabel;
 }
