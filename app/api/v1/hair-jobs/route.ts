@@ -17,7 +17,8 @@ export async function POST(request: Request) {
     const portraitAuthorized = form.get("portraitAuthorized") === "true";
     const aiProcessingConsent = form.get("aiProcessingConsent") === "true";
     const consentVersion = form.get("consentVersion");
-    if (!portraitAuthorized || !aiProcessingConsent || consentVersion !== PHOTO_CONSENT_VERSION) return Response.json({ error: "consent_required" }, { status: 400 });
+    if (consentVersion !== PHOTO_CONSENT_VERSION) return Response.json({ error: "client_update_required" }, { status: 409 });
+    if (!portraitAuthorized || !aiProcessingConsent) return Response.json({ error: "consent_required" }, { status: 400 });
     if (!(photo instanceof File)) return Response.json({ error: "photo_required" }, { status: 400 });
     if (!ALLOWED_TYPES.has(photo.type)) return Response.json({ error: "unsupported_file_type" }, { status: 415 });
     if (photo.size <= 0 || photo.size > MAX_FILE_SIZE) return Response.json({ error: "file_too_large" }, { status: 413 });

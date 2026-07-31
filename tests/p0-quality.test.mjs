@@ -44,14 +44,18 @@ test("preview release score fails closed when a required metric is missing", () 
 });
 
 test("web UI exposes separate authorization, processing and AI content disclosures", async () => {
-  const [app, createRoute] = await Promise.all([
+  const [app, createRoute, styles] = await Promise.all([
     readFile(new URL("../app/HairApp.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/v1/hair-jobs/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
   ]);
   assert.match(app, /照片属于本人，或已获得照片中人物的明确授权/);
   assert.match(app, /不将照片用于训练/);
   assert.match(app, /AI 生成发型效果/);
   assert.match(app, /生成期间不能再修改建议/);
+  assert.match(app, /client_update_required: "网页已更新，请刷新页面后重新选择照片。"/);
   assert.match(createRoute, /consentVersion !== PHOTO_CONSENT_VERSION/);
+  assert.match(createRoute, /client_update_required/);
   assert.match(createRoute, /consent_required/);
+  assert.match(styles, /\.review-photo img \{[^}]*object-fit: contain;/);
 });

@@ -27,6 +27,7 @@ const ERROR_MESSAGES: Record<string, string> = {
   unsupported_file_type: "仅支持 JPEG、PNG 或 WebP 图片。",
   file_too_large: "图片不能超过 15MB。",
   create_job_failed: "创建任务失败，请稍后重试。",
+  client_update_required: "网页已更新，请刷新页面后重新选择照片。",
   processing_failed: "AI 服务暂时不可用，请稍后重试。",
   invalid_api_key: "AI 服务密钥无效，请联系管理员更新配置。",
   insufficient_credits: "AI 服务额度不足，请联系管理员充值后重试。",
