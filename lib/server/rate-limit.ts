@@ -12,7 +12,7 @@ interface BucketResult {
 }
 
 export interface RateLimitResult extends BucketResult {
-  scope: "visitor_hour" | "visitor_day" | "visitor_retry" | "global_jobs" | "global_generation" | "global_analysis" | "global_qc" | "global_qc_escalation";
+  scope: "visitor_hour" | "visitor_day" | "visitor_retry" | "global_jobs" | "global_generation" | "global_analysis" | "global_qc" | "global_qc_escalation" | "global_consultation" | "global_revision";
 }
 
 function boundedInteger(value: string | undefined, fallback: number, minimum: number, maximum: number) {
@@ -125,6 +125,19 @@ export async function consumeModelCallLimit(kind: "analysis" | "image" | "qualit
       : kind === "quality"
         ? { scope: "global_qc" as const, key: "qc-luna:global:day", value: bindings.MAX_QC_CALLS_PER_DAY, fallback: 200 }
         : { scope: "global_qc_escalation" as const, key: "qc-terra:global:day", value: bindings.MAX_QC_ESCALATIONS_PER_DAY, fallback: 100 };
+  return consumeFirstBlocked([{
+    scope: config.scope,
+    key: config.key,
+    units: 1,
+    limit: boundedInteger(config.value, config.fallback, 1, 100_000),
+    duration: DAY_MS,
+  }]);
+}
+
+export async function consumeConsultationCallLimit(kind: "consultation" | "revision") {
+  const config = kind === "consultation"
+    ? { scope: "global_consultation" as const, key: "consultation:global:day", value: bindings.MAX_CONSULTATION_CALLS_PER_DAY, fallback: 400 }
+    : { scope: "global_revision" as const, key: "revision:global:day", value: bindings.MAX_REVISION_CALLS_PER_DAY, fallback: 200 };
   return consumeFirstBlocked([{
     scope: config.scope,
     key: config.key,

@@ -9,6 +9,8 @@ import type { AssetId, BilingualLabel, HairJobView, HairSlot, JobAsset, JobStatu
 import { composeBarberBriefCard } from "@/lib/client/barber-brief-card";
 import { inspectPhoto, preparePhotoUpload, type PhotoInspection } from "@/lib/client/photo-quality";
 import { composeHairReport } from "@/lib/client/report";
+import { PHOTO_CONSENT_VERSION } from "@/lib/hair/privacy";
+import { getHairInspirationLinks, hairInspirationPlatformLabel } from "@/lib/hair/inspiration";
 
 const ACTIVE_STATUSES: JobStatus[] = ["validating", "analyzing", "generating", "compositing"];
 const STATUS_STEPS: Array<{ status: JobStatus; zh: string; en: string }> = [
@@ -45,6 +47,12 @@ const ERROR_MESSAGES: Record<string, string> = {
   quality_service_failed: "预览质检服务暂时不可用，请稍后重新分析。",
   provider_not_configured: "当前识别服务尚未配置，请联系管理员。",
   image_preview_disabled: "真人预览目前未开放，文字报告仍可正常使用。",
+  consultation_disabled: "沟通改建议暂未开放，当前报告仍可正常使用。",
+  consultation_turn_limit: "这一轮沟通已经确认完整，可以直接调整建议或保留原建议。",
+  revision_limit_reached: "这份报告已经完成两次建议调整。",
+  consultation_in_progress: "请先确认调整方向或保留原建议，再生成真人预览。",
+  consultation_locked: "真人预览开始后不能再修改建议。",
+  consent_required: "请先确认肖像授权与本次 AI 处理说明。",
 };
 
 function Bi({ value }: { value: BilingualLabel }) {
@@ -71,6 +79,42 @@ function statusRank(status: JobStatus, progress = 0) {
   return rank[status];
 }
 
+function HairInspirationLinks({ styleId }: { styleId: string }) {
+  const links = getHairInspirationLinks(styleId);
+  if (!links.length) return null;
+  return (
+    <aside className="hair-inspiration" aria-label="真实发型灵感">
+      <div className="hair-inspiration-heading">
+        <strong>真实发型灵感</strong>
+        <small>REAL REFERENCES</small>
+      </div>
+      <p className="hair-inspiration-intro">看看真实轮廓和打理效果。点击后将离开 HAIRFORM，进入第三方平台。</p>
+      <div className="hair-inspiration-list">
+        {links.map((link) => {
+          const platform = hairInspirationPlatformLabel(link.platform);
+          return (
+            <a
+              href={link.url}
+              key={link.id}
+              target="_blank"
+              rel="noopener noreferrer nofollow external"
+              referrerPolicy="no-referrer"
+              onClick={(event) => {
+                if (!window.confirm(`即将打开${platform}原帖（第三方平台），是否继续？`)) event.preventDefault();
+              }}
+            >
+              <span className={`hair-inspiration-platform is-${link.platform}`}>{platform}</span>
+              <span className="hair-inspiration-copy"><b>@{link.creatorDisplayName}</b><small>{link.summaryZh}</small></span>
+              <span className="hair-inspiration-action">去原帖看效果 ↗</span>
+            </a>
+          );
+        })}
+      </div>
+      <p className="hair-inspiration-disclaimer">原帖内容归作者及平台所有，非合作或代言，仅作发型灵感参考。</p>
+    </aside>
+  );
+}
+
 function AssetCard({ asset, job, selected, onSelect, onRetry, onOpenBarberBrief }: { asset: JobAsset; job: HairJobView; selected?: boolean; onSelect: (id: PreviewAssetId) => void; onRetry: (id: AssetId) => void; onOpenBarberBrief: (id: HairSlot) => void }) {
   const recommendation = job.analysis?.hairstyleSlots.find((item) => item.slot === asset.id);
   const colorIndex = asset.id === "color_primary" ? 0 : 1;
@@ -79,11 +123,13 @@ function AssetCard({ asset, job, selected, onSelect, onRetry, onOpenBarberBrief 
   const colorPresentation = job.presentation?.colors.find((item) => item.assetId === asset.id);
   const advice = stylePresentation?.advice ?? colorPresentation?.advice;
   const title = recommendation ? SLOT_LABELS[recommendation.slot] : color ? colorLabel(color.colorId) : { zh: "生成中", en: "GENERATING" };
+  const consultationActive = ["clarifying", "ready_to_confirm", "revising"].includes(job.consultation?.state ?? "");
   const canSelect = asset.id !== "less_suitable"
     && asset.status === "not_requested"
     && ["analysis_ready", "awaiting_selection", "completed", "partial"].includes(job.status)
     && Boolean(job.generationPolicy?.imagePreviewAvailable)
-    && !job.generationPolicy?.selectedAssetId;
+    && !job.generationPolicy?.selectedAssetId
+    && !consultationActive;
   return (
     <article className={`asset-card ${asset.kind === "color" ? "is-color" : ""} ${asset.id === "less_suitable" ? "is-caution" : ""} ${selected ? "is-selected" : ""}`}>
       <div className="asset-media">
@@ -106,6 +152,7 @@ function AssetCard({ asset, job, selected, onSelect, onRetry, onOpenBarberBrief 
           {advice && <p className="recommendation-advice">{advice.zh}</p>}
           {canSelect && <button className={`selection-button ${selected ? "is-selected" : ""}`} aria-pressed={selected} onClick={() => onSelect(asset.id as PreviewAssetId)}><span>{selected ? "已选这款" : "选这款"}</span><small>{selected ? "SELECTED ✓" : "SELECT FIRST"}</small></button>}
           {recommendation.slot !== "less_suitable" && <button className="barber-brief-button" onClick={() => onOpenBarberBrief(recommendation.slot)}><span>给理发师看</span><small>BARBER BRIEF ↗</small></button>}
+          {recommendation.slot !== "less_suitable" && <HairInspirationLinks styleId={recommendation.styleId} />}
         </>}
         {color && <>
           <div className="color-line"><i style={{ background: getColor(color.colorId).hex }} /><span>{color.level ? `${color.level} 度` : "自然明度"}</span></div>
@@ -191,13 +238,15 @@ function BarberBriefDialog({ brief, imageUrl, busy, notice, onClose, onCopy, onD
 export function HairApp() {
   const fileInput = useRef<HTMLInputElement>(null);
   const cameraInput = useRef<HTMLInputElement>(null);
+  const consultationRef = useRef<HTMLDivElement>(null);
   const composingJob = useRef<string | null>(null);
   const accessToken = useRef<string | undefined>(undefined);
   const [file, setFile] = useState<File>();
   const [localPreview, setLocalPreview] = useState<string>();
   const [inspection, setInspection] = useState<PhotoInspection>();
   const [checking, setChecking] = useState(false);
-  const [consent, setConsent] = useState(false);
+  const [authorizationConsent, setAuthorizationConsent] = useState(false);
+  const [processingConsent, setProcessingConsent] = useState(false);
   const [job, setJob] = useState<HairJobView>();
   const [error, setError] = useState<string>();
   const [feedback, setFeedback] = useState<boolean>();
@@ -207,6 +256,8 @@ export function HairApp() {
   const [selectedStyleId, setSelectedStyleId] = useState<string>();
   const [briefBusy, setBriefBusy] = useState<"download" | "share">();
   const [briefNotice, setBriefNotice] = useState<string>();
+  const [consultationInput, setConsultationInput] = useState("");
+  const [consultationBusy, setConsultationBusy] = useState<"message" | "confirm" | "cancel">();
 
   const refreshJob = useCallback(async (jobId: string) => {
     try {
@@ -246,7 +297,7 @@ export function HairApp() {
 
   useEffect(() => {
     const canCompose = job && job.analysis && (job.status === "compositing" || (job.status === "analysis_ready" && !job.reportUrl));
-    const composeKey = job ? `${job.id}:${job.generationPolicy?.selectedAssetId ?? "text"}` : "";
+    const composeKey = job ? `${job.id}:${job.generationPolicy?.selectedAssetId ?? "text"}:${job.consultation?.revisionsUsed ?? 0}` : "";
     if (!canCompose || composingJob.current === composeKey) return;
     composingJob.current = composeKey;
     void (async () => {
@@ -265,7 +316,7 @@ export function HairApp() {
   }, [job, refreshJob]);
 
   const blockingIssues = inspection?.issues.filter((issue) => issue.blocking) ?? [];
-  const canStart = Boolean(file && inspection && blockingIssues.length === 0 && consent && !checking);
+  const canStart = Boolean(file && inspection && blockingIssues.length === 0 && authorizationConsent && processingConsent && !checking);
   const resultReady = Boolean(job && ["analysis_ready", "awaiting_selection", "completed", "partial"].includes(job.status));
   const recommendationAssets = job?.assets.filter((asset) => asset.kind === "hairstyle") ?? [];
   const colorAssets = job?.assets.filter((asset) => asset.kind === "color") ?? [];
@@ -284,6 +335,9 @@ export function HairApp() {
   const pendingColor = pendingAssetId ? job?.presentation?.colors.find((item) => item.assetId === pendingAssetId) : undefined;
   const pendingLabel = pendingStyle?.styleLabel ?? pendingColor?.label;
   const pendingKind = pendingColor ? "发色" : "发型";
+  const pendingDetails = pendingStyle
+    ? [pendingStyle.lengthLabel.zh, pendingStyle.fringeLabel.zh, pendingStyle.partLabel.zh]
+    : pendingColor ? [pendingColor.levelLabel.zh, "只调整发色", "保留脸部与背景"] : [];
 
   async function selectPhoto(nextFile?: File) {
     if (!nextFile) return;
@@ -292,7 +346,8 @@ export function HairApp() {
     setError(undefined);
     setChecking(true);
     setInspection(undefined);
-    setConsent(false);
+    setAuthorizationConsent(false);
+    setProcessingConsent(false);
     setFile(nextFile);
     setLocalPreview((previous) => {
       if (previous) URL.revokeObjectURL(previous);
@@ -305,7 +360,7 @@ export function HairApp() {
 
   function resetPhoto() {
     if (localPreview) URL.revokeObjectURL(localPreview);
-    setFile(undefined); setLocalPreview(undefined); setInspection(undefined); setConsent(false); setError(undefined);
+    setFile(undefined); setLocalPreview(undefined); setInspection(undefined); setAuthorizationConsent(false); setProcessingConsent(false); setError(undefined);
   }
 
   async function startJob() {
@@ -314,6 +369,9 @@ export function HairApp() {
     try {
       const form = new FormData();
       form.append("photo", await preparePhotoUpload(file));
+      form.append("portraitAuthorized", "true");
+      form.append("aiProcessingConsent", "true");
+      form.append("consentVersion", PHOTO_CONSENT_VERSION);
       if (inspection.mask) form.append("mask", new File([inspection.mask], "hair-mask.png", { type: "image/png" }));
       const created = await jsonRequest<{ jobId: string; accessToken: string; expiresAt: string; demoMode: boolean }>("/api/v1/hair-jobs", { method: "POST", body: form });
       accessToken.current = created.accessToken;
@@ -343,7 +401,7 @@ export function HairApp() {
   }
 
   async function generateAsset(id: PreviewAssetId) {
-    if (!job || busyAsset || !["analysis_ready", "awaiting_selection", "completed", "partial"].includes(job.status)) return;
+    if (!job || busyAsset || ["clarifying", "ready_to_confirm", "revising"].includes(job.consultation?.state ?? "") || !["analysis_ready", "awaiting_selection", "completed", "partial"].includes(job.status)) return;
     const recommendation = job.analysis?.hairstyleSlots.find((item) => item.slot === id);
     setBusyAsset(id); setError(undefined); composingJob.current = null;
     if (recommendation) setSelectedStyleId(recommendation.styleId);
@@ -374,6 +432,45 @@ export function HairApp() {
     const effectiveStyleId = selectedStyleId || job.analysis?.hairstyleSlots.find((item) => item.slot === selectedSlot)?.styleId;
     await jsonRequest(`/api/v1/hair-jobs/${job.id}/feedback`, { method: "POST", headers: authHeaders(accessToken.current, true), body: JSON.stringify({ helpful, selectedStyleId: effectiveStyleId }) });
     setFeedback(helpful);
+    if (!helpful) window.setTimeout(() => consultationRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }), 50);
+  }
+
+  async function sendConsultation(messageOverride?: string) {
+    const message = (messageOverride ?? consultationInput).trim();
+    if (!job || !message || consultationBusy) return;
+    setConsultationBusy("message"); setError(undefined); setPendingAssetId(undefined);
+    try {
+      const current = await jsonRequest<HairJobView>(`/api/v1/hair-jobs/${job.id}/consultation/messages`, {
+        method: "POST", headers: authHeaders(accessToken.current, true), body: JSON.stringify({ message }),
+      });
+      setJob(current); setConsultationInput("");
+    } catch (consultationError) {
+      const code = consultationError instanceof Error ? consultationError.message : "processing_failed";
+      setError(ERROR_MESSAGES[code] || "暂时没能理解这条补充，请稍后再试。");
+    } finally { setConsultationBusy(undefined); }
+  }
+
+  async function confirmConsultation() {
+    if (!job || consultationBusy || job.consultation?.state !== "ready_to_confirm") return;
+    setConsultationBusy("confirm"); setError(undefined); setPendingAssetId(undefined); composingJob.current = null;
+    try {
+      const current = await jsonRequest<HairJobView>(`/api/v1/hair-jobs/${job.id}/consultation/confirm`, { method: "POST", headers: authHeaders(accessToken.current, true), body: "{}" });
+      setJob(current);
+    } catch (consultationError) {
+      const code = consultationError instanceof Error ? consultationError.message : "processing_failed";
+      setError(ERROR_MESSAGES[code] || "建议调整失败，原来的报告没有受到影响，请稍后再试。");
+      await refreshJob(job.id).catch(() => undefined);
+    } finally { setConsultationBusy(undefined); }
+  }
+
+  async function cancelConsultation() {
+    if (!job || consultationBusy) return;
+    setConsultationBusy("cancel"); setError(undefined);
+    try {
+      const current = await jsonRequest<HairJobView>(`/api/v1/hair-jobs/${job.id}/consultation/cancel`, { method: "POST", headers: authHeaders(accessToken.current, true), body: "{}" });
+      setJob(current); setConsultationInput("");
+    } catch { setError("暂时无法保留原建议，请稍后再试。"); }
+    finally { setConsultationBusy(undefined); }
   }
 
   function openBarberBrief(slot: HairSlot) {
@@ -490,7 +587,7 @@ export function HairApp() {
     <main className="site-shell">
       <header className="topbar">
         <a className="brand" href="#top" aria-label="型格首页"><span>型格</span><small>HAIRFORM</small></a>
-        <div className="topbar-meta"><span>V0.5 · SELECT THEN GENERATE</span><span className="privacy-dot" />24H PRIVATE</div>
+        <div className="topbar-meta"><span>V0.6.1 · CONSULT THEN GENERATE</span><span className="privacy-dot" />24H PRIVATE</div>
       </header>
 
       {!job && <>
@@ -498,7 +595,7 @@ export function HairApp() {
           <div className="hero-copy">
             <p className="eyebrow">AI MEN&apos;S HAIR REPORT / 01</p>
             <h1>先看见，<br />再决定<span>剪什么。</span></h1>
-            <p className="hero-lead">一张正面照，先听懂适合你的理由。看完建议再选一款发型或发色，确认后才生成完整真人预览图。</p>
+            <p className="hero-lead">一张正面照，先听懂适合你的理由。不满意可以继续和顾问聊，调整好建议再选一款，确认后生成完整真人预览图。</p>
             <div className="hero-stats"><span><strong>3</strong> 款推荐</span><span><strong>1</strong> 次视觉分析</span><span><strong>24H</strong> 自动删除</span></div>
           </div>
           <div className="hero-mark" aria-hidden="true"><span>01</span><b>LOOK<br />FIRST</b><i /></div>
@@ -513,10 +610,16 @@ export function HairApp() {
             </div>
           </div> : <div className="review-grid">
             <div className="review-photo">{localPreview && <img src={localPreview} alt="待分析的正面肖像" />}<button onClick={resetPhoto}>重新选择</button></div>
-            <div className="review-panel"><p className="eyebrow">PHOTO CHECK</p><h3>{checking ? "正在检查照片" : blockingIssues.length ? "建议重新拍摄" : "照片可以使用"}</h3>
-              {inspection && <div className="photo-meta"><span>{inspection.width} × {inspection.height}</span><span>亮度 {Math.round(inspection.luminance)} / 255</span></div>}
-              <ul className="issue-list">{checking && <li className="is-ok">正在读取清晰度与光线…</li>}{inspection?.issues.map((issue) => <li className={issue.blocking ? "is-error" : "is-note"} key={issue.code}>{issue.message}</li>)}{inspection && !blockingIssues.length && <li className="is-ok">清晰度与基础光线检查通过</li>}</ul>
-              {!blockingIssues.length && inspection && <label className="consent"><input type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)} /><span>我确认照片属于本人或已获授权，并同意上传至 AI 服务处理。文件最长保留24小时，可随时删除。</span></label>}
+            <div className="review-panel"><p className="eyebrow">PHOTO CHECK</p><h3>{checking ? "正在本地检查照片" : blockingIssues.length ? "建议重新拍摄" : "照片可以使用"}</h3>
+              <p className="local-check-note">照片先在你的浏览器里检查；只有检查合格并由你确认后，才会上传开始分析。</p>
+              {inspection && <div className="photo-meta"><span>{inspection.width} × {inspection.height}</span><span>亮度 {Math.round(inspection.luminance)} / 255</span><span>清晰度 {Math.round(inspection.sharpness)}</span><span>{inspection.detector === "mediapipe" ? "本地完整检查" : inspection.detector === "native" ? "浏览器基础检查" : "服务端继续复核"}</span></div>}
+              {checking && <div className="photo-check-loading">正在检查清晰度、单人脸、角度和构图…</div>}
+              {inspection && <div className="photo-check-grid">{inspection.checks.map((check) => <div className={`photo-check is-${check.status}`} key={check.id}><span>{check.status === "pass" ? "✓" : check.status === "fail" ? "!" : "i"}</span><div><strong>{check.label}</strong><small>{check.detail}</small></div></div>)}</div>}
+              <ul className="issue-list">{inspection?.issues.map((issue) => <li className={issue.blocking ? "is-error" : "is-note"} key={issue.code}>{issue.message}</li>)}{inspection && !blockingIssues.length && <li className="is-ok">关键检查已通过，可以继续</li>}</ul>
+              {!blockingIssues.length && inspection && <div className="consent-group">
+                <label className="consent"><input type="checkbox" checked={authorizationConsent} onChange={(event) => setAuthorizationConsent(event.target.checked)} /><span>我确认照片属于本人，或已获得照片中人物的明确授权。</span></label>
+                <label className="consent"><input type="checkbox" checked={processingConsent} onChange={(event) => setProcessingConsent(event.target.checked)} /><span>我同意本次将肖像交给已配置的 AI 服务完成分析和所选预览。HAIRFORM 不将照片用于训练，任务最长保留 24 小时，也可以立即删除。</span></label>
+              </div>}
               <button className="primary-button full" disabled={!canStart} onClick={startJob}>生成我的发型报告 <span>→</span></button>
             </div>
           </div>}
@@ -548,13 +651,26 @@ export function HairApp() {
         <div className="asset-grid">{recommendationAssets.map((asset) => <AssetCard asset={asset} job={job} selected={pendingAssetId === asset.id} key={asset.id} onSelect={setPendingAssetId} onRetry={retryAsset} onOpenBarberBrief={openBarberBrief} />)}</div>
         <div className="result-section-heading"><p className="eyebrow">02 / COLORS</p><h2>想换发色，也可以先选中再生成</h2></div>
         <div className="asset-grid color-grid">{colorAssets.map((asset) => <AssetCard asset={asset} job={job} selected={pendingAssetId === asset.id} key={asset.id} onSelect={setPendingAssetId} onRetry={retryAsset} onOpenBarberBrief={openBarberBrief} />)}</div>
-        {job.generationPolicy?.imagePreviewAvailable && !job.generationPolicy.selectedAssetId && pendingAssetId && <div className="generation-confirm has-selection" aria-live="polite">
-          <div><p className="eyebrow">FINAL CONFIRMATION / 最后确认</p><h3>已选{pendingKind}：{pendingLabel?.zh}</h3><p>点击右侧按钮后才会开始生成；完成后会自动重排整张高清报告。</p></div>
+        {job.generationPolicy?.imagePreviewAvailable && !job.generationPolicy.selectedAssetId && pendingAssetId && !["clarifying", "ready_to_confirm", "revising"].includes(job.consultation?.state ?? "") && <div className="generation-confirm has-selection" aria-live="polite">
+          <div><p className="eyebrow">FINAL CONFIRMATION / 最后确认</p><h3>已选{pendingKind}：{pendingLabel?.zh}</h3><div className="generation-details">{pendingDetails.map((detail) => <span key={detail}>{detail}</span>)}</div><p>确认后才会锁定本次建议并开始生成；生成期间不能再修改建议，完成后会自动重排整张高清报告。</p></div>
           <button className="primary-button" disabled={Boolean(busyAsset)} onClick={() => void generateAsset(pendingAssetId)}>{busyAsset ? "正在提交…" : `生成「${pendingLabel?.zh}」完整预览 →`}</button>
         </div>}
         {!job.generationPolicy?.imagePreviewAvailable && !job.generationPolicy?.selectedAssetId && <p className="preview-unavailable-note">真人预览暂未开放。你仍然可以查看完整建议与下载文字版报告；开放后这里会出现“选中后生成”按钮。</p>}
         <div className="overall-card"><p className="eyebrow">OVERALL STYLE</p><h2>{job.analysis.styleTraitIds.map((id) => STYLE_TRAIT_LABELS[id]?.zh).filter(Boolean).join(" · ")}</h2><p>{styleLabel(job.analysis.hairstyleSlots[0].styleId).zh}优先，保留轻盈纹理与自然分缝。</p></div>
-        {job.previewUrl && <div className="report-preview"><img src={job.previewUrl} alt="完整发型与发色分析报告预览" /><div><p className="eyebrow">READY TO SAVE</p><h2>{job.generationPolicy?.selectedAssetId ? "完整真人预览图已排好" : "你的建议报告已排好"}</h2><p>{job.generationPolicy?.selectedAssetId ? "所选真人效果、个性化理由、发型建议、发色色卡与整体风格都在一张 2160 × 3840 PNG 里。" : "当前是文字建议版；选中一款并生成后，会自动升级为带真人效果的完整预览图。"}</p><div className="report-actions"><button className="primary-button" onClick={downloadReport}>下载高清报告 ↓</button><button className="secondary-button" onClick={shareReport}>分享结果 ↗</button></div></div></div>}
+        {(job.consultation?.enabled || Boolean(job.consultation?.revisionsUsed)) && <div className={`consultation-panel state-${job.consultation?.state}`} ref={consultationRef}>
+          <div className="consultation-heading"><div><p className="eyebrow">03 / PERSONAL CONSULTANT</p><h2>不太满意？告诉我想改哪里</h2></div><span>{job.consultation?.provider === "qwen" ? "千问顾问" : "GPT 顾问"} · 已调整 {job.consultation?.revisionsUsed ?? 0}/2 次</span></div>
+          <p className="consultation-privacy">这里只沟通发型、发色和打理偏好。后续不会再次发送你的照片。</p>
+          {job.consultation?.changeSummary && <div className="consultation-change"><b>上次调整</b><p>{job.consultation.changeSummary.zh}</p></div>}
+          {job.consultation?.state === "locked" ? <p className="consultation-locked">真人预览已经开始，当前建议与图片已锁定，不能继续修改。</p> : <>
+            {job.consultation?.messages.length ? <div className="consultation-messages" aria-live="polite">{job.consultation.messages.map((message, index) => <div className={message.role} key={`${message.role}:${index}`}><small>{message.role === "user" ? "你" : "发型顾问"}</small><p>{message.content}</p></div>)}</div> : <p className="consultation-intro">比如你可以说：“不想剪太短，早上没时间吹头发，也不喜欢厚刘海。”我会先确认你的真实想法，再重新排建议。</p>}
+            {job.consultation?.state === "ready_to_confirm" && job.consultation.pendingPreferences && <div className="preference-confirm"><small>我理解的是</small><strong>{job.consultation.pendingPreferences.summaryZh}</strong><div><button className="primary-button" disabled={Boolean(consultationBusy)} onClick={() => void confirmConsultation()}>{consultationBusy === "confirm" ? "正在重新调整…" : "确认按这个调整 →"}</button><button className="secondary-button" disabled={Boolean(consultationBusy)} onClick={() => void cancelConsultation()}>保留原建议</button></div></div>}
+            {(job.consultation?.turnsUsed ?? 0) < 2 && <>
+              <div className="consultation-chips">{["不要太短", "尽量好打理", "不喜欢厚刘海", "想更自然一点", "发色变化小一点"].map((label) => <button disabled={Boolean(consultationBusy)} key={label} onClick={() => void sendConsultation(label)}>{label}</button>)}</div>
+              <div className="consultation-composer"><textarea maxLength={500} value={consultationInput} onChange={(event) => setConsultationInput(event.target.value)} placeholder={job.consultation?.state === "ready_to_confirm" ? "还想补充什么？最多再沟通一轮" : "说说哪一处不符合你的想法…"} /><button className="primary-button" disabled={Boolean(consultationBusy) || !consultationInput.trim()} onClick={() => void sendConsultation()}>{consultationBusy === "message" ? "正在理解…" : "发送给顾问 →"}</button></div>
+            </>}
+          </>}
+        </div>}
+        {job.previewUrl && <div className="report-preview"><img src={job.previewUrl} alt="完整发型与发色分析报告预览" /><div><p className="eyebrow">READY TO SAVE</p><h2>{job.generationPolicy?.selectedAssetId ? "完整真人预览图已排好" : "你的建议报告已排好"}</h2><p>{job.generationPolicy?.selectedAssetId ? "所选真人效果、个性化理由、发型建议、发色色卡与整体风格都在一张 2160 × 3840 PNG 里。" : "当前是文字建议版；选中一款并生成后，会自动升级为带真人效果的完整预览图。"}</p><div className="ai-content-note"><strong>{job.generationPolicy?.selectedAssetId ? "AI 生成发型效果" : "AI 辅助建议"}</strong><span>图片带内容标识 · HAIRFORM 不将照片用于训练 · 效果不等同真实染剪结果</span></div><div className="report-actions"><button className="primary-button" onClick={downloadReport}>下载高清报告 ↓</button><button className="secondary-button" onClick={shareReport}>分享结果 ↗</button></div></div></div>}
         {["analysis_ready", "completed", "partial"].includes(job.status) && <div className="feedback-row"><div><p className="eyebrow">FEEDBACK</p><h3>这个结果对你有帮助吗？</h3></div><div><button disabled={feedback !== undefined} className={feedback === true ? "selected" : ""} onClick={() => void submitFeedback(true)}>有帮助</button><button disabled={feedback !== undefined} className={feedback === false ? "selected" : ""} onClick={() => void submitFeedback(false)}>没帮助</button></div></div>}
         {job.status === "partial" && <p className="error-banner">部分预览没有成功，你可以在对应卡片中单独重试。</p>}
         {job.status === "analysis_ready" && job.errorCode && <p className="error-banner">真人预览未能完成，文字分析、沟通卡和原始报告仍可正常使用。</p>}

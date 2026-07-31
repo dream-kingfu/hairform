@@ -21,6 +21,11 @@ export const ANALYSIS_MODEL_ALLOWLIST = {
   glm: "glm-4.6v-flash",
 } as const;
 
+export const CONSULTATION_MODEL_ALLOWLIST = {
+  kie: "gpt-5-6-terra",
+  qwen: "qwen3.6-flash",
+} as const;
+
 export function modelFor(purpose: ModelPurpose) {
   if (purpose === "analysis") return MODEL_POLICY.analysis.model;
   if (purpose === "quality") return MODEL_POLICY.quality.model;
@@ -48,6 +53,13 @@ export function assertProductionModelPolicy(bindings: ModelPolicyBindings) {
 export function assertAnalysisModelPolicy(provider: string, model: string) {
   if (!(provider in ANALYSIS_MODEL_ALLOWLIST)
     || ANALYSIS_MODEL_ALLOWLIST[provider as keyof typeof ANALYSIS_MODEL_ALLOWLIST] !== model) {
+    throw new Error("model_policy_error");
+  }
+}
+
+export function assertConsultationModelPolicy(provider: string, model: string) {
+  if (!(provider in CONSULTATION_MODEL_ALLOWLIST)
+    || CONSULTATION_MODEL_ALLOWLIST[provider as keyof typeof CONSULTATION_MODEL_ALLOWLIST] !== model) {
     throw new Error("model_policy_error");
   }
 }

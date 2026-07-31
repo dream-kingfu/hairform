@@ -17,6 +17,38 @@ test("contains the finished HAIRFORM experience", async () => {
   assert.doesNotMatch(`${app}\n${layout}`, /codex-preview|SkeletonPreview|Your site is taking shape/);
 });
 
+test("exposes the web-only conversational revision controls", async () => {
+  const [app, admin, styles] = await Promise.all([
+    readFile(new URL("../app/HairApp.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/admin/AdminApp.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(app, /V0\.6\.1 · CONSULT THEN GENERATE/);
+  assert.match(app, /不太满意？告诉我想改哪里/);
+  assert.match(app, /确认按这个调整/);
+  assert.match(app, /保留原建议/);
+  assert.match(app, /长度|刘海|打理难度|风格|发色/);
+  assert.match(admin, /沟通改建议/);
+  assert.match(admin, /GPT \/ Kie Terra/);
+  assert.match(admin, /千问 Qwen/);
+  assert.match(styles, /consultation-panel/);
+});
+
+test("exposes text-only domestic hairstyle inspiration on positive web cards", async () => {
+  const [app, inspiration, report] = await Promise.all([
+    readFile(new URL("../app/HairApp.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../lib/hair/inspiration.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/client/report.ts", import.meta.url), "utf8"),
+  ]);
+  assert.match(app, /真实发型灵感/);
+  assert.match(app, /去原帖看效果/);
+  assert.match(app, /recommendation\.slot !== "less_suitable"/);
+  assert.match(inspiration, /www\.douyin\.com/);
+  assert.match(inspiration, /www\.xiaohongshu\.com/);
+  assert.doesNotMatch(inspiration, /\b(?:imageUrl|thumbnailUrl|noteText|followers|comments)\s*:/);
+  assert.doesNotMatch(report, /HairInspiration|真实发型灵感/);
+});
+
 test("keeps model output separate from deterministic labels", async () => {
   const [catalog, labels, report, hosting, page] = await Promise.all([
     readFile(new URL("../lib/hair/catalog.ts", import.meta.url), "utf8"),

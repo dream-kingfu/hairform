@@ -1,5 +1,5 @@
-import type { AnalysisProvider } from "@/lib/hair/types";
-import { ANALYSIS_MODEL_ALLOWLIST } from "./model-policy";
+import type { AnalysisProvider, ConsultationProvider } from "@/lib/hair/types";
+import { ANALYSIS_MODEL_ALLOWLIST, CONSULTATION_MODEL_ALLOWLIST } from "./model-policy";
 import { bindings, ensureSchema, getRuntimeAiConfig } from "./jobs";
 import { isAnalysisProviderConfigured, testAnalysisProvider } from "./openai";
 
@@ -8,6 +8,10 @@ const HEALTH_TTL_MS = 30 * 60_000;
 
 export function isAnalysisProvider(value: unknown): value is AnalysisProvider {
   return typeof value === "string" && PROVIDERS.includes(value as AnalysisProvider);
+}
+
+export function isConsultationProvider(value: unknown): value is ConsultationProvider {
+  return value === "kie" || value === "qwen";
 }
 
 export async function writeAdminAudit(action: string, input: { providerId?: AnalysisProvider; details?: Record<string, unknown>; ipFingerprint?: string } = {}) {
@@ -69,6 +73,8 @@ export async function updateRuntimeConfig(input: {
   revision: number;
   analysisProvider: AnalysisProvider;
   imagePreviewEnabled: boolean;
+  consultationProvider: ConsultationProvider;
+  consultationEnabled: boolean;
   ipFingerprint?: string;
 }) {
   await ensureSchema();
@@ -79,11 +85,21 @@ export async function updateRuntimeConfig(input: {
       .bind(input.analysisProvider).first<{ status: string; tested_at: number }>();
     if (!health || health.status !== "ok" || Date.now() - health.tested_at > HEALTH_TTL_MS) throw new Error("provider_health_required");
   }
+  if (input.consultationProvider !== current.consultationProvider || (input.consultationEnabled && !current.consultationEnabled)) {
+    if (!isAnalysisProviderConfigured(input.consultationProvider)) throw new Error("provider_not_configured");
+    const health = await bindings.DB.prepare("SELECT status, tested_at FROM provider_health WHERE provider_id = ?")
+      .bind(input.consultationProvider).first<{ status: string; tested_at: number }>();
+    if (!health || health.status !== "ok" || Date.now() - health.tested_at > HEALTH_TTL_MS) throw new Error("provider_health_required");
+  }
   const now = Date.now();
   const updated = await bindings.DB.prepare(`UPDATE ai_runtime_config SET
-    analysis_provider = ?, analysis_model = ?, image_preview_enabled = ?, revision = revision + 1, updated_at = ?
+    analysis_provider = ?, analysis_model = ?, image_preview_enabled = ?,
+    consultation_provider = ?, consultation_model = ?, consultation_enabled = ?,
+    revision = revision + 1, updated_at = ?
     WHERE id = 1 AND revision = ? RETURNING revision`)
-    .bind(input.analysisProvider, ANALYSIS_MODEL_ALLOWLIST[input.analysisProvider], input.imagePreviewEnabled ? 1 : 0, now, input.revision)
+    .bind(input.analysisProvider, ANALYSIS_MODEL_ALLOWLIST[input.analysisProvider], input.imagePreviewEnabled ? 1 : 0,
+      input.consultationProvider, CONSULTATION_MODEL_ALLOWLIST[input.consultationProvider], input.consultationEnabled ? 1 : 0,
+      now, input.revision)
     .first<{ revision: number }>();
   if (!updated) throw new Error("config_conflict");
   if (input.analysisProvider !== current.analysisProvider) {
@@ -91,6 +107,12 @@ export async function updateRuntimeConfig(input: {
   }
   if (input.imagePreviewEnabled !== current.imagePreviewEnabled) {
     await writeAdminAudit("image_preview_toggle", { details: { enabled: input.imagePreviewEnabled, revision: updated.revision }, ipFingerprint: input.ipFingerprint });
+  }
+  if (input.consultationProvider !== current.consultationProvider) {
+    await writeAdminAudit("consultation_provider_switch", { providerId: input.consultationProvider, details: { from: current.consultationProvider, revision: updated.revision }, ipFingerprint: input.ipFingerprint });
+  }
+  if (input.consultationEnabled !== current.consultationEnabled) {
+    await writeAdminAudit("consultation_toggle", { details: { enabled: input.consultationEnabled, revision: updated.revision }, ipFingerprint: input.ipFingerprint });
   }
   return getRuntimeAiConfig();
 }
@@ -103,15 +125,17 @@ export async function adminDashboardData() {
       COALESCE(SUM(analysis_calls), 0) AS analyses,
       SUM(CASE WHEN status IN ('analysis_ready','awaiting_selection','generating','compositing','completed','partial') THEN 1 ELSE 0 END) AS successes,
       SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failures,
-      COALESCE(SUM(image_calls), 0) AS image_calls
-      FROM hair_jobs WHERE created_at >= ?`).bind(new Date().setHours(0, 0, 0, 0)).first<{ analyses: number; successes: number; failures: number; image_calls: number }>(),
+      COALESCE(SUM(image_calls), 0) AS image_calls,
+      COALESCE(SUM(consultation_calls), 0) AS consultation_calls,
+      COALESCE(SUM(revision_calls), 0) AS revision_calls
+      FROM hair_jobs WHERE created_at >= ?`).bind(new Date().setHours(0, 0, 0, 0)).first<{ analyses: number; successes: number; failures: number; image_calls: number; consultation_calls: number; revision_calls: number }>(),
     bindings.DB.prepare("SELECT action, provider_id, details_json, created_at FROM admin_audit_log ORDER BY created_at DESC LIMIT 30")
       .all<{ action: string; provider_id: string | null; details_json: string; created_at: number }>(),
   ]);
   return {
     config,
     providers: providers.map((provider) => ({ ...provider, health: health.find((item) => item.providerId === provider.id) })),
-    usage: usage ?? { analyses: 0, successes: 0, failures: 0, image_calls: 0 },
+    usage: usage ?? { analyses: 0, successes: 0, failures: 0, image_calls: 0, consultation_calls: 0, revision_calls: 0 },
     audit: audit.results.map((row) => ({ action: row.action, providerId: row.provider_id, details: JSON.parse(row.details_json), createdAt: new Date(row.created_at).toISOString() })),
   };
 }

@@ -1,6 +1,7 @@
 import { env } from "cloudflare:workers";
-import type { AnalysisProvider, AssetId, HairAnalysis, HairJobView, JobAsset, JobStatus, PreviewAssetId } from "@/lib/hair/types";
+import type { AnalysisProvider, AssetId, BilingualLabel, ConsultationMessage, ConsultationProvider, ConsultationState, HairAnalysis, HairJobView, HairPreferenceProfile, JobAsset, JobStatus, PreviewAssetId } from "@/lib/hair/types";
 import { buildHairPresentation } from "@/lib/hair/presentation";
+import { CONSULTATION_MODEL_ALLOWLIST } from "./model-policy";
 
 interface RuntimeBindings {
   DB: D1Database;
@@ -34,6 +35,8 @@ interface RuntimeBindings {
   MAX_ANALYSIS_CALLS_PER_DAY?: string;
   MAX_QC_CALLS_PER_DAY?: string;
   MAX_QC_ESCALATIONS_PER_DAY?: string;
+  MAX_CONSULTATION_CALLS_PER_DAY?: string;
+  MAX_REVISION_CALLS_PER_DAY?: string;
   KIE_MIN_CREDITS?: string;
   GENERATION_CONCURRENCY?: string;
 }
@@ -66,6 +69,18 @@ export interface StoredJob {
   provider_task_attempt: number;
   analysis_provider: AnalysisProvider;
   analysis_model: string;
+  consultation_provider: ConsultationProvider;
+  consultation_model: string;
+  consultation_state: ConsultationState;
+  consultation_json: string;
+  pending_preferences_json: string | null;
+  preference_json: string | null;
+  change_summary_json: string | null;
+  consultation_round_turns: number;
+  consultation_calls: number;
+  revision_calls: number;
+  consent_version: string;
+  consent_at: number | null;
 }
 
 export const bindings = env as unknown as RuntimeBindings;
@@ -114,7 +129,19 @@ export async function ensureSchema() {
       qc_luna_calls INTEGER NOT NULL DEFAULT 0,
       qc_terra_calls INTEGER NOT NULL DEFAULT 0,
       provider_task_id TEXT,
-      provider_task_attempt INTEGER NOT NULL DEFAULT 0
+      provider_task_attempt INTEGER NOT NULL DEFAULT 0,
+      analysis_provider TEXT NOT NULL DEFAULT 'kie',
+      analysis_model TEXT NOT NULL DEFAULT 'gpt-5-6-terra',
+      consultation_provider TEXT NOT NULL DEFAULT 'kie',
+      consultation_model TEXT NOT NULL DEFAULT 'gpt-5-6-terra',
+      consultation_state TEXT NOT NULL DEFAULT 'idle',
+      consultation_json TEXT NOT NULL DEFAULT '[]',
+      pending_preferences_json TEXT,
+      preference_json TEXT,
+      change_summary_json TEXT,
+      consultation_round_turns INTEGER NOT NULL DEFAULT 0,
+      consultation_calls INTEGER NOT NULL DEFAULT 0,
+      revision_calls INTEGER NOT NULL DEFAULT 0
     )`),
     bindings.DB.prepare("CREATE INDEX IF NOT EXISTS hair_jobs_expires_idx ON hair_jobs (expires_at)"),
     bindings.DB.prepare(`CREATE TABLE IF NOT EXISTS rate_limit_buckets (
@@ -135,6 +162,9 @@ export async function ensureSchema() {
       analysis_provider TEXT NOT NULL DEFAULT 'kie',
       analysis_model TEXT NOT NULL DEFAULT 'gpt-5-6-terra',
       image_preview_enabled INTEGER NOT NULL DEFAULT 0,
+      consultation_provider TEXT NOT NULL DEFAULT 'kie',
+      consultation_model TEXT NOT NULL DEFAULT 'gpt-5-6-terra',
+      consultation_enabled INTEGER NOT NULL DEFAULT 0,
       revision INTEGER NOT NULL DEFAULT 1,
       updated_at INTEGER NOT NULL
     )`),
@@ -163,8 +193,9 @@ export async function ensureSchema() {
     )`),
     bindings.DB.prepare("CREATE INDEX IF NOT EXISTS admin_audit_created_idx ON admin_audit_log (created_at)"),
     bindings.DB.prepare(`INSERT INTO ai_runtime_config (
-      id, analysis_provider, analysis_model, image_preview_enabled, revision, updated_at
-    ) VALUES (1, 'kie', 'gpt-5-6-terra', 0, 1, ?)
+      id, analysis_provider, analysis_model, image_preview_enabled,
+      consultation_provider, consultation_model, consultation_enabled, revision, updated_at
+    ) VALUES (1, 'kie', 'gpt-5-6-terra', 0, 'kie', 'gpt-5-6-terra', 0, 1, ?)
     ON CONFLICT(id) DO NOTHING`).bind(Date.now()),
   ]);
   const columns = await bindings.DB.prepare("PRAGMA table_info(hair_jobs)").all<{ name: string }>();
@@ -180,9 +211,30 @@ export async function ensureSchema() {
     ["provider_task_attempt", "ALTER TABLE hair_jobs ADD COLUMN provider_task_attempt INTEGER NOT NULL DEFAULT 0"],
     ["analysis_provider", "ALTER TABLE hair_jobs ADD COLUMN analysis_provider TEXT NOT NULL DEFAULT 'kie'"],
     ["analysis_model", "ALTER TABLE hair_jobs ADD COLUMN analysis_model TEXT NOT NULL DEFAULT 'gpt-5-6-terra'"],
+    ["consultation_provider", "ALTER TABLE hair_jobs ADD COLUMN consultation_provider TEXT NOT NULL DEFAULT 'kie'"],
+    ["consultation_model", "ALTER TABLE hair_jobs ADD COLUMN consultation_model TEXT NOT NULL DEFAULT 'gpt-5-6-terra'"],
+    ["consultation_state", "ALTER TABLE hair_jobs ADD COLUMN consultation_state TEXT NOT NULL DEFAULT 'idle'"],
+    ["consultation_json", "ALTER TABLE hair_jobs ADD COLUMN consultation_json TEXT NOT NULL DEFAULT '[]'"],
+    ["pending_preferences_json", "ALTER TABLE hair_jobs ADD COLUMN pending_preferences_json TEXT"],
+    ["preference_json", "ALTER TABLE hair_jobs ADD COLUMN preference_json TEXT"],
+    ["change_summary_json", "ALTER TABLE hair_jobs ADD COLUMN change_summary_json TEXT"],
+    ["consultation_round_turns", "ALTER TABLE hair_jobs ADD COLUMN consultation_round_turns INTEGER NOT NULL DEFAULT 0"],
+    ["consultation_calls", "ALTER TABLE hair_jobs ADD COLUMN consultation_calls INTEGER NOT NULL DEFAULT 0"],
+    ["revision_calls", "ALTER TABLE hair_jobs ADD COLUMN revision_calls INTEGER NOT NULL DEFAULT 0"],
+    ["consent_version", "ALTER TABLE hair_jobs ADD COLUMN consent_version TEXT NOT NULL DEFAULT 'legacy'"],
+    ["consent_at", "ALTER TABLE hair_jobs ADD COLUMN consent_at INTEGER"],
   ] as const;
   for (const [name, sql] of additions) {
     if (!columns.results.some((column) => column.name === name)) await bindings.DB.prepare(sql).run();
+  }
+  const configColumns = await bindings.DB.prepare("PRAGMA table_info(ai_runtime_config)").all<{ name: string }>();
+  const configAdditions = [
+    ["consultation_provider", "ALTER TABLE ai_runtime_config ADD COLUMN consultation_provider TEXT NOT NULL DEFAULT 'kie'"],
+    ["consultation_model", "ALTER TABLE ai_runtime_config ADD COLUMN consultation_model TEXT NOT NULL DEFAULT 'gpt-5-6-terra'"],
+    ["consultation_enabled", "ALTER TABLE ai_runtime_config ADD COLUMN consultation_enabled INTEGER NOT NULL DEFAULT 0"],
+  ] as const;
+  for (const [name, sql] of configAdditions) {
+    if (!configColumns.results.some((column) => column.name === name)) await bindings.DB.prepare(sql).run();
   }
   schemaReady = true;
 }
@@ -245,15 +297,20 @@ export async function insertJob(input: {
   demoMode: boolean;
   analysisProvider: AnalysisProvider;
   analysisModel: string;
+  consultationProvider: ConsultationProvider;
+  consultationModel: string;
+  consentVersion: string;
 }) {
   await ensureSchema();
   const now = Date.now();
   const expiresAt = now + DAY_MS;
   await bindings.DB.prepare(`INSERT INTO hair_jobs (
     id, token_hash, status, progress, original_key, mask_key, assets_json,
-    demo_mode, generation_policy, analysis_provider, analysis_model, created_at, updated_at, expires_at
-  ) VALUES (?, ?, 'validating', 4, ?, ?, ?, ?, 'text-first-v1', ?, ?, ?, ?, ?)`)
-    .bind(input.id, input.tokenHash, input.originalKey, input.maskKey ?? null, JSON.stringify(DEFAULT_ASSETS), input.demoMode ? 1 : 0, input.analysisProvider, input.analysisModel, now, now, expiresAt)
+    demo_mode, generation_policy, analysis_provider, analysis_model,
+    consultation_provider, consultation_model, consent_version, consent_at,
+    created_at, updated_at, expires_at
+  ) VALUES (?, ?, 'validating', 4, ?, ?, ?, ?, 'text-first-v1', ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .bind(input.id, input.tokenHash, input.originalKey, input.maskKey ?? null, JSON.stringify(DEFAULT_ASSETS), input.demoMode ? 1 : 0, input.analysisProvider, input.analysisModel, input.consultationProvider, input.consultationModel, input.consentVersion, now, now, now, expiresAt)
     .run();
   return { expiresAt };
 }
@@ -327,10 +384,74 @@ export async function claimGenerationJob(jobId: string, assetId: PreviewAssetId)
     provider_task_attempt = 0, work_lock_until = ?, updated_at = ?
     WHERE id = ? AND generation_policy IN ('single-preview-v1', 'text-first-v1')
       AND status IN ('analysis_ready', 'awaiting_selection', 'completed', 'partial') AND selected_asset_id IS NULL
+      AND consultation_state NOT IN ('clarifying', 'ready_to_confirm', 'revising')
       AND (work_lock_until IS NULL OR work_lock_until <= ?)
     RETURNING *`)
     .bind(assetId, now + WORK_LOCK_MS, now, jobId, now)
     .first<StoredJob>();
+}
+
+export async function claimConsultationJob(jobId: string, expected: ConsultationState[]) {
+  await ensureSchema();
+  const now = Date.now();
+  const placeholders = expected.map(() => "?").join(",");
+  return bindings.DB.prepare(`UPDATE hair_jobs SET work_lock_until = ?, updated_at = ?
+    WHERE id = ? AND status IN ('analysis_ready', 'awaiting_selection') AND selected_asset_id IS NULL
+      AND revision_calls < 2 AND consultation_state IN (${placeholders})
+      AND (work_lock_until IS NULL OR work_lock_until <= ?)
+    RETURNING *`)
+    .bind(now + 90_000, now, jobId, ...expected, now)
+    .first<StoredJob>();
+}
+
+export async function saveConsultationTurn(jobId: string, input: {
+  state: "clarifying" | "ready_to_confirm";
+  messages: ConsultationMessage[];
+  preferences: HairPreferenceProfile;
+  turns: number;
+}) {
+  await ensureSchema();
+  await bindings.DB.prepare(`UPDATE hair_jobs SET consultation_state = ?, consultation_json = ?,
+    pending_preferences_json = ?, consultation_round_turns = ?, consultation_calls = consultation_calls + 1,
+    work_lock_until = NULL, updated_at = ? WHERE id = ?`)
+    .bind(input.state, JSON.stringify(input.messages.slice(-8)), JSON.stringify(input.preferences), input.turns, Date.now(), jobId)
+    .run();
+}
+
+export async function beginConsultationRevision(jobId: string) {
+  await ensureSchema();
+  return bindings.DB.prepare("UPDATE hair_jobs SET consultation_state = 'revising', updated_at = ? WHERE id = ? AND revision_calls < 2 RETURNING revision_calls")
+    .bind(Date.now(), jobId).first<{ revision_calls: number }>();
+}
+
+export async function completeConsultationRevision(jobId: string, input: {
+  analysis: HairAnalysis;
+  preferences: HairPreferenceProfile;
+  changeSummary: BilingualLabel;
+}) {
+  await ensureSchema();
+  await bindings.DB.prepare(`UPDATE hair_jobs SET analysis_json = ?, preference_json = ?, change_summary_json = ?,
+    consultation_state = 'revised', consultation_json = '[]', pending_preferences_json = NULL,
+    consultation_round_turns = 0, revision_calls = revision_calls + 1,
+    report_key = NULL, preview_key = NULL, error_code = NULL,
+    work_lock_until = NULL, updated_at = ? WHERE id = ? AND consultation_state = 'revising' AND revision_calls < 2`)
+    .bind(JSON.stringify(input.analysis), JSON.stringify(input.preferences), JSON.stringify(input.changeSummary), Date.now(), jobId)
+    .run();
+  if (bindings.HAIR_ASSETS) await bindings.HAIR_ASSETS.delete([assetKey(jobId, "report"), assetKey(jobId, "report_preview")]);
+}
+
+export async function failConsultationWork(jobId: string, restoreState: ConsultationState, errorCode?: string) {
+  await ensureSchema();
+  await bindings.DB.prepare("UPDATE hair_jobs SET consultation_state = ?, error_code = ?, work_lock_until = NULL, updated_at = ? WHERE id = ?")
+    .bind(restoreState, errorCode ?? null, Date.now(), jobId).run();
+}
+
+export async function cancelConsultation(jobId: string) {
+  await ensureSchema();
+  await bindings.DB.prepare(`UPDATE hair_jobs SET consultation_state = CASE WHEN revision_calls > 0 THEN 'revised' ELSE 'idle' END,
+    consultation_json = '[]', pending_preferences_json = NULL, consultation_round_turns = 0,
+    work_lock_until = NULL, updated_at = ? WHERE id = ? AND selected_asset_id IS NULL`)
+    .bind(Date.now(), jobId).run();
 }
 
 export async function claimGenerationPoll(jobId: string) {
@@ -382,10 +503,32 @@ export function parseAssets(job: StoredJob): JobAsset[] {
   catch { return job.generation_policy === "single-preview-v1" ? DEFAULT_ASSETS : LEGACY_ASSETS; }
 }
 
+export function parseConsultationMessages(job: StoredJob): ConsultationMessage[] {
+  try {
+    const parsed = JSON.parse(job.consultation_json || "[]") as ConsultationMessage[];
+    return Array.isArray(parsed) ? parsed.filter((message) => message && ["user", "assistant"].includes(message.role) && typeof message.content === "string").slice(-8) : [];
+  } catch { return []; }
+}
+
+export function parsePreferences(value: string | null): HairPreferenceProfile | undefined {
+  if (!value) return undefined;
+  try { return JSON.parse(value) as HairPreferenceProfile; }
+  catch { return undefined; }
+}
+
+export function parseChangeSummary(value: string | null): BilingualLabel | undefined {
+  if (!value) return undefined;
+  try { return JSON.parse(value) as BilingualLabel; }
+  catch { return undefined; }
+}
+
 export interface RuntimeAiConfig {
   analysisProvider: AnalysisProvider;
   analysisModel: string;
   imagePreviewEnabled: boolean;
+  consultationProvider: ConsultationProvider;
+  consultationModel: string;
+  consultationEnabled: boolean;
   revision: number;
   updatedAt: number;
 }
@@ -399,7 +542,7 @@ export const PROVIDER_MODELS: Record<AnalysisProvider, string> = {
 export async function getRuntimeAiConfig(): Promise<RuntimeAiConfig> {
   await ensureSchema();
   const row = await bindings.DB.prepare("SELECT * FROM ai_runtime_config WHERE id = 1")
-    .first<{ analysis_provider: string; analysis_model: string; image_preview_enabled: number; revision: number; updated_at: number }>();
+    .first<{ analysis_provider: string; analysis_model: string; image_preview_enabled: number; consultation_provider: string; consultation_model: string; consultation_enabled: number; revision: number; updated_at: number }>();
   const analysisProvider = row && ["kie", "qwen", "glm"].includes(row.analysis_provider)
     ? row.analysis_provider as AnalysisProvider
     : "kie";
@@ -407,6 +550,11 @@ export async function getRuntimeAiConfig(): Promise<RuntimeAiConfig> {
     analysisProvider,
     analysisModel: PROVIDER_MODELS[analysisProvider],
     imagePreviewEnabled: Boolean(row?.image_preview_enabled),
+    consultationProvider: row && ["kie", "qwen"].includes(row.consultation_provider) ? row.consultation_provider as ConsultationProvider : "kie",
+    consultationModel: row && ["kie", "qwen"].includes(row.consultation_provider)
+      ? CONSULTATION_MODEL_ALLOWLIST[row.consultation_provider as ConsultationProvider]
+      : CONSULTATION_MODEL_ALLOWLIST.kie,
+    consultationEnabled: Boolean(row?.consultation_enabled),
     revision: row?.revision ?? 1,
     updatedAt: row?.updated_at ?? Date.now(),
   };
@@ -415,6 +563,8 @@ export async function getRuntimeAiConfig(): Promise<RuntimeAiConfig> {
 export async function toJobView(job: StoredJob): Promise<HairJobView> {
   const runtime = await getRuntimeAiConfig();
   const analysis = job.analysis_json ? JSON.parse(job.analysis_json) as HairAnalysis : undefined;
+  const confirmedPreferences = parsePreferences(job.preference_json);
+  const consultationLocked = Boolean(job.selected_asset_id) || ["generating", "compositing", "completed", "partial", "failed", "expired", "deleted"].includes(job.status) || job.revision_calls >= 2;
   const assets = parseAssets(job).map((asset) => ({
     ...asset,
     url: asset.status === "ready" ? `/api/v1/hair-jobs/${job.id}/assets/${asset.id}` : undefined,
@@ -431,7 +581,7 @@ export async function toJobView(job: StoredJob): Promise<HairJobView> {
     expiresAt: new Date(job.expires_at).toISOString(),
     demoMode: Boolean(job.demo_mode),
     errorCode: job.error_code ?? undefined,
-    presentation: analysis ? buildHairPresentation(analysis) : undefined,
+    presentation: analysis ? buildHairPresentation(analysis, confirmedPreferences) : undefined,
     generationPolicy: {
       version: job.generation_policy === "text-first-v1" ? "text-first-v1" : job.generation_policy === "single-preview-v1" ? "single-preview-v1" : "legacy-six-v1",
       selectableAssetIds: ["best_short", "best_medium", "best_long", "color_primary", "color_secondary"],
@@ -444,6 +594,20 @@ export async function toJobView(job: StoredJob): Promise<HairJobView> {
     },
     analysisProvider: job.analysis_provider,
     analysisModel: job.analysis_model,
+    consultation: {
+      enabled: runtime.consultationEnabled && !consultationLocked,
+      state: consultationLocked ? "locked" : job.consultation_state,
+      provider: job.consultation_provider,
+      model: job.consultation_model,
+      messages: parseConsultationMessages(job),
+      pendingPreferences: parsePreferences(job.pending_preferences_json),
+      confirmedPreferences,
+      changeSummary: parseChangeSummary(job.change_summary_json),
+      turnsUsed: job.consultation_round_turns,
+      turnLimit: 2,
+      revisionsUsed: job.revision_calls,
+      revisionLimit: 2,
+    },
   };
 }
 
@@ -464,14 +628,14 @@ export async function deleteJobObjects(jobId: string) {
 
 async function expireJob(job: StoredJob) {
   await deleteJobObjects(job.id);
-  await bindings.DB.prepare("UPDATE hair_jobs SET status = 'expired', progress = 100, analysis_json = NULL, assets_json = '[]', report_key = NULL, preview_key = NULL, updated_at = ? WHERE id = ?")
+  await bindings.DB.prepare("UPDATE hair_jobs SET status = 'expired', progress = 100, analysis_json = NULL, assets_json = '[]', report_key = NULL, preview_key = NULL, consultation_json = '[]', pending_preferences_json = NULL, preference_json = NULL, change_summary_json = NULL, updated_at = ? WHERE id = ?")
     .bind(Date.now(), job.id)
     .run();
 }
 
 export async function deleteJob(job: StoredJob) {
   await deleteJobObjects(job.id);
-  await bindings.DB.prepare("UPDATE hair_jobs SET status = 'deleted', progress = 100, analysis_json = NULL, assets_json = '[]', report_key = NULL, preview_key = NULL, deleted_at = ?, updated_at = ? WHERE id = ?")
+  await bindings.DB.prepare("UPDATE hair_jobs SET status = 'deleted', progress = 100, analysis_json = NULL, assets_json = '[]', report_key = NULL, preview_key = NULL, consultation_json = '[]', pending_preferences_json = NULL, preference_json = NULL, change_summary_json = NULL, deleted_at = ?, updated_at = ? WHERE id = ?")
     .bind(Date.now(), Date.now(), job.id)
     .run();
 }

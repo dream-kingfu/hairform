@@ -1,6 +1,7 @@
 import { cleanupExpiredJobs, createJobIdentity, getRuntimeAiConfig, hashToken, insertJob, isDemoMode, jobCookie, putAsset } from "@/lib/server/jobs";
 import { consumeNewJobLimit, rateLimitResponse } from "@/lib/server/rate-limit";
 import { isAnalysisProviderConfigured } from "@/lib/server/openai";
+import { PHOTO_CONSENT_VERSION } from "@/lib/hair/privacy";
 
 export const dynamic = "force-dynamic";
 
@@ -13,6 +14,10 @@ export async function POST(request: Request) {
     const form = await request.formData();
     const photo = form.get("photo");
     const mask = form.get("mask");
+    const portraitAuthorized = form.get("portraitAuthorized") === "true";
+    const aiProcessingConsent = form.get("aiProcessingConsent") === "true";
+    const consentVersion = form.get("consentVersion");
+    if (!portraitAuthorized || !aiProcessingConsent || consentVersion !== PHOTO_CONSENT_VERSION) return Response.json({ error: "consent_required" }, { status: 400 });
     if (!(photo instanceof File)) return Response.json({ error: "photo_required" }, { status: 400 });
     if (!ALLOWED_TYPES.has(photo.type)) return Response.json({ error: "unsupported_file_type" }, { status: 415 });
     if (photo.size <= 0 || photo.size > MAX_FILE_SIZE) return Response.json({ error: "file_too_large" }, { status: 413 });
@@ -39,6 +44,9 @@ export async function POST(request: Request) {
       demoMode: isDemoMode(),
       analysisProvider: runtime.analysisProvider,
       analysisModel: runtime.analysisModel,
+      consultationProvider: runtime.consultationProvider,
+      consultationModel: runtime.consultationModel,
+      consentVersion: PHOTO_CONSENT_VERSION,
     });
     return Response.json(
       { jobId, accessToken: token, status: "validating", expiresAt: new Date(expiresAt).toISOString(), demoMode: isDemoMode() },

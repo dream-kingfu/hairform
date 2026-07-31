@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { ANALYSIS_MODEL_ALLOWLIST, assertAnalysisModelPolicy } from "../lib/server/model-policy.ts";
+import { ANALYSIS_MODEL_ALLOWLIST, CONSULTATION_MODEL_ALLOWLIST, assertAnalysisModelPolicy, assertConsultationModelPolicy } from "../lib/server/model-policy.ts";
 
 test("analysis provider allowlist is fixed", () => {
   assert.deepEqual(ANALYSIS_MODEL_ALLOWLIST, {
@@ -12,6 +12,13 @@ test("analysis provider allowlist is fixed", () => {
   for (const [provider, model] of Object.entries(ANALYSIS_MODEL_ALLOWLIST)) assert.doesNotThrow(() => assertAnalysisModelPolicy(provider, model));
   assert.throws(() => assertAnalysisModelPolicy("deepseek", "deepseek-v4"), /model_policy_error/);
   assert.throws(() => assertAnalysisModelPolicy("qwen", "qwen-max"), /model_policy_error/);
+});
+
+test("consultation provider allowlist is limited to GPT and Qwen", () => {
+  assert.deepEqual(CONSULTATION_MODEL_ALLOWLIST, { kie: "gpt-5-6-terra", qwen: "qwen3.6-flash" });
+  for (const [provider, model] of Object.entries(CONSULTATION_MODEL_ALLOWLIST)) assert.doesNotThrow(() => assertConsultationModelPolicy(provider, model));
+  assert.throws(() => assertConsultationModelPolicy("deepseek", "deepseek-v4"), /model_policy_error/);
+  assert.throws(() => assertConsultationModelPolicy("glm", "glm-4.6v-flash"), /model_policy_error/);
 });
 
 test("analysis schema rejects unknown catalog ids and invalid enums", () => {

@@ -1,8 +1,9 @@
 import { HAIR_COLOR_CATALOG, HAIRSTYLE_CATALOG, getColor, getStyle } from "@/lib/hair/catalog";
-import type { AnalysisProvider, AssetId, HairAnalysis, HairColorRecommendation, HairstyleRecommendation } from "@/lib/hair/types";
+import { normalizeConsultationTurn, normalizeRecommendationRevision, type ConsultationTurnResult, type RecommendationRevision } from "@/lib/hair/consultation";
+import type { AnalysisProvider, AssetId, ConsultationMessage, ConsultationProvider, HairAnalysis, HairColorRecommendation, HairPreferenceProfile, HairstyleRecommendation } from "@/lib/hair/types";
 import { bindings, isDemoMode } from "./jobs";
 import { describeKieResponseShape, extractKieResponseText } from "./kie-response";
-import { ANALYSIS_MODEL_ALLOWLIST, assertAnalysisModelPolicy, assertProductionModelPolicy, modelFor, reasoningFor, type ModelPurpose } from "./model-policy";
+import { ANALYSIS_MODEL_ALLOWLIST, CONSULTATION_MODEL_ALLOWLIST, assertAnalysisModelPolicy, assertConsultationModelPolicy, assertProductionModelPolicy, modelFor, reasoningFor, type ModelPurpose } from "./model-policy";
 import { recordProviderFailure, recordProviderSuccess } from "./provider-health";
 
 const KIE_DEFAULT_API_BASE = "https://api.kie.ai";
@@ -72,12 +73,13 @@ const analysisSchema = {
 
 const qcSchema = {
   type: "object", additionalProperties: false,
-  required: ["identityPreserved", "hairTargetMatched", "nonHairRegionPreserved", "artifactFree", "confidence"],
+  required: ["identityPreserved", "hairTargetMatched", "nonHairRegionPreserved", "artifactFree", "hairEdgeQuality", "confidence"],
   properties: {
     identityPreserved: { type: "boolean" },
     hairTargetMatched: { type: "boolean" },
     nonHairRegionPreserved: { type: "boolean" },
     artifactFree: { type: "boolean" },
+    hairEdgeQuality: { type: "boolean" },
     confidence: { type: "number", minimum: 0, maximum: 1 },
   },
 } as const;
@@ -376,6 +378,93 @@ async function compatibleVisionRequest(providerId: "qwen" | "glm", prompt: strin
   return await response.json() as Record<string, unknown>;
 }
 
+async function consultationRequest(providerId: ConsultationProvider, prompt: string) {
+  assertConsultationModelPolicy(providerId, CONSULTATION_MODEL_ALLOWLIST[providerId]);
+  if (providerId === "kie") {
+    const payload = await kieResponsesRequest({
+      model: CONSULTATION_MODEL_ALLOWLIST.kie,
+      input: [{ role: "user", content: [{ type: "input_text", text: prompt }] }],
+      reasoning: { effort: "low" },
+    });
+    return responseText(payload);
+  }
+  const apiKey = bindings.QWEN_API_KEY;
+  if (!apiKey) throw new Error("provider_not_configured");
+  const base = bindings.QWEN_API_BASE || "https://dashscope.aliyuncs.com/compatible-mode/v1";
+  const response = await fetch(`${base.replace(/\/$/, "")}/chat/completions`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: CONSULTATION_MODEL_ALLOWLIST.qwen,
+      messages: [{ role: "system", content: "You are HAIRFORM's concise hairstyle preference consultant. Return only JSON." }, { role: "user", content: prompt }],
+      response_format: { type: "json_object" },
+      enable_thinking: false,
+      temperature: 0.1,
+      stream: false,
+    }),
+    signal: AbortSignal.timeout(90_000),
+  });
+  if (!response.ok) {
+    const body = await response.text();
+    const code = response.status === 401 ? "invalid_api_key" : response.status === 429 ? "rate_limited" : body.toLowerCase().includes("safety") ? "moderation_blocked" : "model_request_failed";
+    throw new Error(code);
+  }
+  return chatCompletionText(await response.json() as Record<string, unknown>);
+}
+
+const preferenceShape = {
+  preferredLengths: ["short", "medium", "long"],
+  maintenanceTolerance: "low | medium | high | open",
+  fringePreference: "prefer | avoid | open",
+  colorChange: "none | subtle | noticeable | open",
+  moodIds: ["natural | clean | soft | mature | youthful | sporty | editorial"],
+  mustAvoid: ["up to three short Chinese constraints"],
+  summaryZh: "one natural Chinese sentence confirming the user's preference",
+};
+
+export async function consultHairPreferences(input: {
+  provider: ConsultationProvider;
+  analysis: HairAnalysis;
+  messages: ConsultationMessage[];
+  turn: number;
+}): Promise<ConsultationTurnResult> {
+  if (isDemoMode()) {
+    const last = input.messages.filter((message) => message.role === "user").at(-1)?.content ?? "";
+    const preferences: HairPreferenceProfile = {
+      preferredLengths: last.includes("长") ? ["long"] : last.includes("短") ? ["short"] : last.includes("中") ? ["medium"] : [],
+      maintenanceTolerance: /不打理|省事|好打理/.test(last) ? "low" : "open",
+      fringePreference: /不要刘海|不喜欢刘海/.test(last) ? "avoid" : /想要刘海|喜欢刘海/.test(last) ? "prefer" : "open",
+      colorChange: /不染|原生发色/.test(last) ? "none" : /明显|亮一点/.test(last) ? "noticeable" : "subtle",
+      moodIds: /成熟/.test(last) ? ["mature"] : /年轻|减龄/.test(last) ? ["youthful"] : ["natural"],
+      mustAvoid: last ? [last.slice(0, 40)] : [],
+      summaryZh: last ? `你希望调整为：${last.slice(0, 80)}。` : "你希望建议更贴近日常、容易打理。",
+    };
+    return { state: input.turn >= 2 ? "ready_to_confirm" : "clarifying", reply: input.turn >= 2 ? "我已经把你的想法整理好了，确认后就按这个方向重新调整。" : "明白了。你对刘海和每天愿意花多少时间打理，还有特别要求吗？", preferences };
+  }
+  const prompt = `You are a hairstyle preference consultant. You receive only text and structured visual analysis; never request or claim to see a photo. Stay within hairstyle, hair color and daily styling preferences. Do not discuss medicine, hair loss treatment, identity, age, ethnicity, attractiveness or personality.\n\nCurrent structured analysis and recommendations: ${JSON.stringify(input.analysis)}\nConversation so far: ${JSON.stringify(input.messages)}\nThis is user turn ${input.turn} of 2. Ask at most one short, useful Chinese clarification question when a material preference is missing. On turn 2 you must stop asking questions and summarize the best interpretation for confirmation. Return exactly one JSON object with this shape: ${JSON.stringify({ state: "clarifying | ready_to_confirm", reply: "natural Chinese response under 120 characters", preferences: preferenceShape })}. Use state ready_to_confirm when the preferences are sufficiently clear.`;
+  const result = parseEmbeddedJson<unknown>(await consultationRequest(input.provider, prompt));
+  return normalizeConsultationTurn(result, input.turn >= 2);
+}
+
+export async function reviseHairRecommendations(input: {
+  provider: ConsultationProvider;
+  analysis: HairAnalysis;
+  preferences: HairPreferenceProfile;
+}): Promise<RecommendationRevision> {
+  if (isDemoMode()) {
+    return normalizeRecommendationRevision({
+      styleTraitIds: input.analysis.styleTraitIds,
+      hairstyleSlots: input.analysis.hairstyleSlots,
+      colors: input.analysis.colors,
+      preferences: input.preferences,
+      changeSummary: { zh: "已经按照你确认的长度、打理和风格偏好重新调整建议。", en: "Recommendations updated around your confirmed preferences." },
+    }, input.analysis);
+  }
+  const catalog = HAIRSTYLE_CATALOG.map(({ id, length, fringeId, partId, textures, densities, faceShapes }) => ({ id, length, fringeId, partId, textures, densities, faceShapes }));
+  const prompt = `Revise HAIRFORM hairstyle recommendations using confirmed user preferences. Return JSON only. Preserve all visual facts; you may change only styleTraitIds, four hairstyleSlots and two colors. Choose exactly one unique catalog style for each slot best_short, best_medium, best_long and less_suitable. The slot still represents its length even when the user dislikes that length; make it the least conflicting option and explain the preference through rationale and traits. Use only existing enum ids. Do not make medical, identity, age, ethnicity, attractiveness or personality claims.\n\nImmutable analysis facts: ${JSON.stringify({ faceShape: input.analysis.faceShape, hairTexture: input.analysis.hairTexture, hairDensity: input.analysis.hairDensity, hairline: input.analysis.hairline, foreheadRatio: input.analysis.foreheadRatio, skinUndertone: input.analysis.skinUndertone, warnings: input.analysis.warnings })}\nCurrent recommendations: ${JSON.stringify({ styleTraitIds: input.analysis.styleTraitIds, hairstyleSlots: input.analysis.hairstyleSlots, colors: input.analysis.colors })}\nConfirmed preferences: ${JSON.stringify(input.preferences)}\nHairstyle catalog: ${JSON.stringify(catalog)}\nHair color ids: ${JSON.stringify(HAIR_COLOR_CATALOG.map(({ id }) => id))}\nReturn exactly: ${JSON.stringify({ styleTraitIds: ["clean | modern | soft | mature | sporty | editorial"], hairstyleSlots: input.analysis.hairstyleSlots, colors: input.analysis.colors, preferences: preferenceShape, changeSummary: { zh: "natural Chinese summary", en: "short English summary" } })}`;
+  return normalizeRecommendationRevision(parseEmbeddedJson<unknown>(await consultationRequest(input.provider, prompt)), input.analysis);
+}
+
 export async function testAnalysisProvider(providerId: AnalysisProvider) {
   const started = Date.now();
   if (!isAnalysisProviderConfigured(providerId)) throw new Error("provider_not_configured");
@@ -540,6 +629,7 @@ export interface QualityCheckResult {
   hairTargetMatched: boolean;
   nonHairRegionPreserved: boolean;
   artifactFree: boolean;
+  hairEdgeQuality: boolean;
   confidence: number;
 }
 
@@ -551,7 +641,7 @@ export async function qualityCheck(input: {
   originalType: string;
   analysis: HairAnalysis;
 }, purpose: "quality" | "quality_escalation" = "quality"): Promise<QualityCheckResult> {
-  if (isDemoMode()) return { identityPreserved: true, hairTargetMatched: true, nonHairRegionPreserved: true, artifactFree: true, confidence: 1 };
+  if (isDemoMode()) return { identityPreserved: true, hairTargetMatched: true, nonHairRegionPreserved: true, artifactFree: true, hairEdgeQuality: true, confidence: 1 };
   assertProductionModelPolicy(bindings);
   const style = input.analysis.hairstyleSlots.find((item) => item.slot === input.id);
   const color = input.id === "color_primary" ? input.analysis.colors[0] : input.id === "color_secondary" ? input.analysis.colors[1] : undefined;
@@ -560,7 +650,7 @@ export async function qualityCheck(input: {
   const outputUrl = isKie() ? await uploadKieImage(input.output, input.outputType) : dataUrl(input.output, input.outputType);
   const requestBody = responsesBody(
     [{ role: "user", content: [
-        { type: "input_text", text: `Compare the original portrait and edited result. Target: ${target}. Check only same-person visual consistency, preservation of non-hair regions, target hair match, and obvious rendering artifacts. This is not identity recognition. Return exactly one valid JSON object matching this JSON Schema, with no Markdown or commentary: ${JSON.stringify(qcSchema)}.` },
+        { type: "input_text", text: `Compare the original portrait and edited result. Target: ${target}. Check only same-person visual consistency, preservation of non-hair regions, target hair match, obvious rendering artifacts, and natural hairline/ear/background edges. This is not identity recognition. Return exactly one valid JSON object matching this JSON Schema, with no Markdown or commentary: ${JSON.stringify(qcSchema)}.` },
         { type: "input_image", image_url: originalUrl },
         { type: "input_image", image_url: outputUrl },
       ] }],
