@@ -317,6 +317,7 @@ export function HairApp() {
   }, [job, refreshJob]);
 
   const blockingIssues = inspection?.issues.filter((issue) => issue.blocking) ?? [];
+  const visibleIssues = inspection?.issues.filter((issue) => issue.code !== "detector_unavailable") ?? [];
   const canStart = Boolean(file && inspection && blockingIssues.length === 0 && authorizationConsent && processingConsent && !checking);
   const resultReady = Boolean(job && ["analysis_ready", "awaiting_selection", "completed", "partial"].includes(job.status));
   const recommendationAssets = job?.assets.filter((asset) => asset.kind === "hairstyle") ?? [];
@@ -616,7 +617,7 @@ export function HairApp() {
               {inspection && <div className="photo-meta"><span>{inspection.width} × {inspection.height}</span><span>亮度 {Math.round(inspection.luminance)} / 255</span><span>清晰度 {Math.round(inspection.sharpness)}</span><span>{inspection.detector === "mediapipe" ? "本地完整检查" : inspection.detector === "native" ? "浏览器基础检查" : "服务端继续复核"}</span></div>}
               {checking && <div className="photo-check-loading">正在检查清晰度、单人脸、角度和构图…</div>}
               {inspection && <div className="photo-check-grid">{inspection.checks.map((check) => <div className={`photo-check is-${check.status}`} key={check.id}><span>{check.status === "pass" ? "✓" : check.status === "fail" ? "!" : "i"}</span><div><strong>{check.label}</strong><small>{check.detail}</small></div></div>)}</div>}
-              <ul className="issue-list">{inspection?.issues.map((issue) => <li className={issue.blocking ? "is-error" : "is-note"} key={issue.code}>{issue.message}</li>)}{inspection && !blockingIssues.length && <li className="is-ok">关键检查已通过，可以继续</li>}</ul>
+              <ul className="issue-list">{visibleIssues.map((issue) => <li className={issue.blocking ? "is-error" : "is-note"} key={issue.code}>{issue.message}</li>)}{inspection && !blockingIssues.length && <li className="is-ok">关键检查已通过，可以继续</li>}</ul>
               {!blockingIssues.length && inspection && <div className="consent-group">
                 <label className="consent"><input type="checkbox" checked={authorizationConsent} onChange={(event) => setAuthorizationConsent(event.target.checked)} /><span>我确认照片属于本人，或已获得照片中人物的明确授权。</span></label>
                 <label className="consent"><input type="checkbox" checked={processingConsent} onChange={(event) => setProcessingConsent(event.target.checked)} /><span>我同意本次将肖像交给已配置的 AI 服务完成分析和所选预览。HAIRFORM 不将照片用于训练，任务最长保留 24 小时，也可以立即删除。</span></label>

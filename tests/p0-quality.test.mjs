@@ -54,6 +54,7 @@ test("web UI exposes separate authorization, processing and AI content disclosur
   assert.match(app, /AI 生成发型效果/);
   assert.match(app, /生成期间不能再修改建议/);
   assert.match(app, /client_update_required: "网页已更新，请刷新页面后重新选择照片。"/);
+  assert.match(app, /visibleIssues = inspection\?\.issues\.filter\(\(issue\) => issue\.code !== "detector_unavailable"\)/);
   assert.match(createRoute, /consentVersion !== PHOTO_CONSENT_VERSION/);
   assert.match(createRoute, /client_update_required/);
   assert.match(createRoute, /consent_required/);
