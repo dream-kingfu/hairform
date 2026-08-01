@@ -23,7 +23,7 @@ test("exposes the web-only conversational revision controls", async () => {
     readFile(new URL("../app/admin/AdminApp.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
   ]);
-  assert.match(app, /V0\.6\.2 · CONSULT THEN GENERATE/);
+  assert.match(app, /V0\.6\.3 · CONSULT THEN GENERATE/);
   assert.match(app, /不太满意？告诉我想改哪里/);
   assert.match(app, /确认按这个调整/);
   assert.match(app, /保留原建议/);

@@ -589,7 +589,7 @@ export function HairApp() {
     <main className="site-shell">
       <header className="topbar">
         <a className="brand" href="#top" aria-label="型格首页"><span>型格</span><small>HAIRFORM</small></a>
-        <div className="topbar-meta"><span>V0.6.2 · CONSULT THEN GENERATE</span><span className="privacy-dot" />24H PRIVATE</div>
+        <div className="topbar-meta"><span>V0.6.3 · CONSULT THEN GENERATE</span><span className="privacy-dot" />24H PRIVATE</div>
       </header>
 
       {!job && <>
