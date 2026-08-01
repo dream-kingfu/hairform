@@ -611,7 +611,7 @@ export function HairApp() {
               <div className="upload-actions"><button className="primary-button" onClick={() => fileInput.current?.click()}>选择照片 <span>↗</span></button><button className="secondary-button" onClick={() => cameraInput.current?.click()}>立即拍照</button></div>
             </div>
           </div> : <div className="review-grid">
-            <div className="review-photo">{localPreview && <img src={localPreview} alt="待分析的正面肖像" />}<button onClick={resetPhoto}>重新选择</button></div>
+            <div className="review-photo">{localPreview && <><img className="review-photo-backdrop" src={localPreview} alt="" aria-hidden="true" /><img className="review-photo-image" src={localPreview} alt="待分析的正面肖像" /></>}<button onClick={resetPhoto}>重新选择</button></div>
             <div className="review-panel"><p className="eyebrow">PHOTO CHECK</p><h3>{checking ? "正在本地检查照片" : blockingIssues.length ? "建议重新拍摄" : "照片可以使用"}</h3>
               <p className="local-check-note">照片先在你的浏览器里检查；只有检查合格并由你确认后，才会上传开始分析。</p>
               {inspection && <div className="photo-meta"><span>{inspection.width} × {inspection.height}</span><span>亮度 {Math.round(inspection.luminance)} / 255</span><span>清晰度 {Math.round(inspection.sharpness)}</span><span>{inspection.detector === "mediapipe" ? "本地完整检查" : inspection.detector === "native" ? "浏览器基础检查" : "服务端继续复核"}</span></div>}

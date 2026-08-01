@@ -58,5 +58,10 @@ test("web UI exposes separate authorization, processing and AI content disclosur
   assert.match(createRoute, /consentVersion !== PHOTO_CONSENT_VERSION/);
   assert.match(createRoute, /client_update_required/);
   assert.match(createRoute, /consent_required/);
-  assert.match(styles, /\.review-photo img \{[^}]*object-fit: contain;/);
+  assert.match(app, /className="review-photo-backdrop"[^>]*alt=""[^>]*aria-hidden="true"/);
+  assert.match(app, /className="review-photo-image"[^>]*alt="待分析的正面肖像"/);
+  assert.equal(app.match(/src=\{localPreview\}/g)?.length, 2);
+  assert.match(styles, /\.review-photo-backdrop \{[^}]*object-fit: cover;[^}]*filter: blur\(/);
+  assert.match(styles, /\.review-photo-image \{[^}]*object-fit: contain;/);
+  assert.match(styles, /\.review-photo button \{[^}]*z-index: 2;/);
 });
