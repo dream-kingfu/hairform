@@ -15,7 +15,7 @@ async function sourceBytes(job: StoredJob) {
 }
 
 function passed(qc: QualityCheckResult) {
-  return qc.identityPreserved && qc.hairTargetMatched && qc.nonHairRegionPreserved && qc.artifactFree;
+  return qc.identityPreserved && qc.hairTargetMatched && qc.nonHairRegionPreserved && qc.artifactFree && qc.hairEdgeQuality;
 }
 
 async function reserveCall(jobId: string, kind: "analysis" | "image" | "quality" | "quality_escalation", limit: number, errorCode: string) {

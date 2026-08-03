@@ -1,0 +1,4 @@
+interface:
+  display_name: "HAIRFORM 发布验收"
+  short_description: "核对需求、代码差异、测试、隐私和发布权限，给出最终验收结论"
+  default_prompt: "Use $hairform-release-gate to perform final acceptance for this HAIRFORM task or pull request."

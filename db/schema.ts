@@ -30,6 +30,18 @@ export const hairJobs = sqliteTable("hair_jobs", {
   providerTaskAttempt: integer("provider_task_attempt").notNull().default(0),
   analysisProvider: text("analysis_provider").notNull().default("kie"),
   analysisModel: text("analysis_model").notNull().default("gpt-5-6-terra"),
+  consultationProvider: text("consultation_provider").notNull().default("kie"),
+  consultationModel: text("consultation_model").notNull().default("gpt-5-6-terra"),
+  consultationState: text("consultation_state").notNull().default("idle"),
+  consultationJson: text("consultation_json").notNull().default("[]"),
+  pendingPreferencesJson: text("pending_preferences_json"),
+  preferenceJson: text("preference_json"),
+  changeSummaryJson: text("change_summary_json"),
+  consultationRoundTurns: integer("consultation_round_turns").notNull().default(0),
+  consultationCalls: integer("consultation_calls").notNull().default(0),
+  revisionCalls: integer("revision_calls").notNull().default(0),
+  consentVersion: text("consent_version").notNull().default("legacy"),
+  consentAt: integer("consent_at"),
 }, (table) => [index("hair_jobs_expires_idx").on(table.expiresAt)]);
 
 export const rateLimitBuckets = sqliteTable("rate_limit_buckets", {
@@ -51,6 +63,9 @@ export const aiRuntimeConfig = sqliteTable("ai_runtime_config", {
   analysisProvider: text("analysis_provider").notNull().default("kie"),
   analysisModel: text("analysis_model").notNull().default("gpt-5-6-terra"),
   imagePreviewEnabled: integer("image_preview_enabled", { mode: "boolean" }).notNull().default(false),
+  consultationProvider: text("consultation_provider").notNull().default("kie"),
+  consultationModel: text("consultation_model").notNull().default("gpt-5-6-terra"),
+  consultationEnabled: integer("consultation_enabled", { mode: "boolean" }).notNull().default(false),
   revision: integer("revision").notNull().default(1),
   updatedAt: integer("updated_at").notNull(),
 });

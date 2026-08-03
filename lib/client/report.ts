@@ -1,5 +1,6 @@
 import { DENSITY_LABELS, FACE_LABELS, FOREHEAD_LABELS, HAIRLINE_LABELS, STYLE_TRAIT_LABELS, TEXTURE_LABELS, UNDERTONE_LABELS } from "@/lib/hair/labels";
 import type { BilingualLabel, HairJobView } from "@/lib/hair/types";
+import { withPngText } from "@/lib/client/image-metadata";
 
 const WIDTH = 2160;
 const HEIGHT = 3840;
@@ -65,7 +66,7 @@ export async function composeHairReport(job: HairJobView) {
   context.fillStyle = PAPER; context.fillRect(0, 0, WIDTH, HEIGHT);
   context.fillStyle = INK; context.fillRect(0, 0, WIDTH, 240);
   text(context, "型格", 88, 108, 66, ACID, 850);
-  text(context, "HAIRFORM / TEXT-FIRST HAIR REPORT", 88, 172, 25, PAPER, 650);
+  text(context, preview ? "HAIRFORM / AI-GENERATED HAIR PREVIEW" : "HAIRFORM / AI-ASSISTED HAIR REPORT", 88, 172, 25, PAPER, 650);
   text(context, preview ? (selectedColor ? "SELECTED COLOR PREVIEW" : "SELECTED STYLE PREVIEW") : "ONE ANALYSIS · ZERO IMAGE CALLS", 1530, 142, 21, ACID, 700);
 
   if (preview) {
@@ -123,9 +124,13 @@ export async function composeHairReport(job: HairJobView) {
   context.fillStyle = INK; context.fillRect(0, 3770, WIDTH, 70);
   const overall = job.analysis.styleTraitIds.map((id) => STYLE_TRAIT_LABELS[id]?.zh).filter(Boolean).join(" · ");
   text(context, overall || job.presentation.overallStyle.zh, 88, 3817, 23, PAPER, 750);
-  text(context, "单张正面照视觉建议 · 非医学或植发结论", 1580, 3817, 17, "#a7ab9b", 550);
+  text(context, preview ? "AI 生成发型效果 · 非真实染剪结果" : "AI 辅助视觉建议 · 非医学或植发结论", 1580, 3817, 17, "#a7ab9b", 550);
 
-  const png = await toBlob(canvas, "image/png");
+  const png = await withPngText(await toBlob(canvas, "image/png"), {
+    AI_Generated: preview ? "true" : "assisted",
+    Generator: "HAIRFORM",
+    Content_Type: preview ? "hairstyle_preview" : "hair_recommendation_report",
+  });
   const previewCanvas = document.createElement("canvas"); previewCanvas.width = 1080; previewCanvas.height = 1920;
   previewCanvas.getContext("2d")?.drawImage(canvas, 0, 0, 1080, 1920);
   return { png, webp: await toBlob(previewCanvas, "image/webp", .9) };

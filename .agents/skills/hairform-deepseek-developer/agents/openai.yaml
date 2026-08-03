@@ -1,0 +1,4 @@
+interface:
+  display_name: "HAIRFORM DeepSeek 开发"
+  short_description: "按任务授权范围实现 HAIRFORM 业务代码并交接"
+  default_prompt: "Use $hairform-deepseek-developer to implement this bounded HAIRFORM task and return a developer report."

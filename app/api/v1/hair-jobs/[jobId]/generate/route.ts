@@ -15,6 +15,7 @@ export async function POST(request: Request, context: Context) {
   if (!["single-preview-v1", "text-first-v1"].includes(job.generation_policy ?? "")) return Response.json({ error: "generation_policy_mismatch" }, { status: 409 });
   const runtime = await getRuntimeAiConfig();
   if (!runtime.imagePreviewEnabled) return Response.json({ error: "image_preview_disabled" }, { status: 403 });
+  if (["clarifying", "ready_to_confirm", "revising"].includes(job.consultation_state)) return Response.json({ error: "consultation_in_progress" }, { status: 409 });
   const payload = await request.json().catch(() => ({})) as { assetId?: string; model?: unknown };
   if (payload.model !== undefined) return Response.json({ error: "model_not_allowed" }, { status: 400 });
   if (!payload.assetId || !SELECTABLE.has(payload.assetId as PreviewAssetId)) {

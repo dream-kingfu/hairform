@@ -19,6 +19,8 @@ export type HairSlot = "best_short" | "best_medium" | "best_long" | "less_suitab
 export type AssetId = HairSlot | "color_primary" | "color_secondary";
 export type PreviewAssetId = Exclude<AssetId, "less_suitable">;
 export type AnalysisProvider = "kie" | "qwen" | "glm";
+export type ConsultationProvider = "kie" | "qwen";
+export type ConsultationState = "idle" | "clarifying" | "ready_to_confirm" | "revising" | "revised" | "locked";
 export type JobStatus =
   | "validating"
   | "analyzing"
@@ -61,6 +63,36 @@ export interface HairAnalysis {
   warnings: string[];
 }
 
+export interface HairPreferenceProfile {
+  preferredLengths: Array<"short" | "medium" | "long">;
+  maintenanceTolerance: "low" | "medium" | "high" | "open";
+  fringePreference: "prefer" | "avoid" | "open";
+  colorChange: "none" | "subtle" | "noticeable" | "open";
+  moodIds: Array<"natural" | "clean" | "soft" | "mature" | "youthful" | "sporty" | "editorial">;
+  mustAvoid: string[];
+  summaryZh: string;
+}
+
+export interface ConsultationMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface HairConsultationView {
+  enabled: boolean;
+  state: ConsultationState;
+  provider: ConsultationProvider;
+  model: string;
+  messages: ConsultationMessage[];
+  pendingPreferences?: HairPreferenceProfile;
+  confirmedPreferences?: HairPreferenceProfile;
+  changeSummary?: BilingualLabel;
+  turnsUsed: number;
+  turnLimit: 2;
+  revisionsUsed: number;
+  revisionLimit: 2;
+}
+
 export interface JobAsset {
   id: AssetId;
   kind: "hairstyle" | "color";
@@ -92,6 +124,7 @@ export interface HairJobView {
   };
   analysisProvider?: AnalysisProvider;
   analysisModel?: string;
+  consultation?: HairConsultationView;
 }
 
 export interface BilingualLabel {

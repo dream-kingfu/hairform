@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "taskId": "HF-000",
+  "reviewer": "gpt-release-reviewer",
+  "verdict": "pass",
+  "repairRound": 0,
+  "requirementsStatus": "passed",
+  "codeStatus": "passed",
+  "functionalStatus": "passed",
+  "visualStatus": "not_applicable",
+  "multimodalStatus": "not_applicable",
+  "privacyStatus": "passed",
+  "databaseStatus": "not_applicable",
+  "releaseStatus": "source_ready",
+  "blockingIssues": [],
+  "followUpIssues": [],
+  "evidenceReviewed": [],
+  "limitations": []
+}

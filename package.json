@@ -1,6 +1,6 @@
 {
   "name": "hairform-ai",
-  "version": "0.5.0",
+  "version": "0.6.3",
   "private": true,
   "license": "AGPL-3.0-only",
   "engines": {
@@ -10,12 +10,13 @@
     "dev": "vinext dev",
     "build": "vinext build",
     "start": "vinext start",
-    "test": "npm run build && node --test tests/rendered-html.test.mjs tests/kie-provider.test.mjs && node --experimental-strip-types --test tests/barber-brief.test.mjs tests/presentation.test.mjs tests/kie-response.test.mjs tests/model-policy.test.mjs tests/rate-limit-policy.test.mjs tests/text-first-policy.test.mjs tests/admin-security.test.mjs",
+    "test": "npm run build && node --test tests/rendered-html.test.mjs tests/kie-provider.test.mjs tests/consultation-routes.test.mjs && node --experimental-strip-types --test tests/barber-brief.test.mjs tests/presentation.test.mjs tests/kie-response.test.mjs tests/model-policy.test.mjs tests/rate-limit-policy.test.mjs tests/text-first-policy.test.mjs tests/admin-security.test.mjs tests/consultation.test.mjs tests/p0-quality.test.mjs tests/inspiration-links.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate",
     "admin:hash-password": "node scripts/hash-admin-password.mjs"
   },
   "dependencies": {
+    "@mediapipe/tasks-vision": "^0.10.22-rc.20250304",
     "drizzle-orm": "0.45.2",
     "next": "16.2.6",
     "react": "19.2.6",

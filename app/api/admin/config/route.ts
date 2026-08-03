@@ -1,5 +1,5 @@
 import { requireAdmin } from "@/lib/server/admin-auth";
-import { adminDashboardData, isAnalysisProvider, updateRuntimeConfig } from "@/lib/server/ai-runtime";
+import { adminDashboardData, isAnalysisProvider, isConsultationProvider, updateRuntimeConfig } from "@/lib/server/ai-runtime";
 
 export const dynamic = "force-dynamic";
 
@@ -11,8 +11,9 @@ export async function GET(request: Request) {
 export async function PUT(request: Request) {
   const admin = await requireAdmin(request, { write: true });
   if (!admin) return Response.json({ error: "admin_unauthorized" }, { status: 401 });
-  const payload = await request.json().catch(() => ({})) as { revision?: unknown; analysisProvider?: unknown; imagePreviewEnabled?: unknown };
-  if (!Number.isInteger(payload.revision) || !isAnalysisProvider(payload.analysisProvider) || typeof payload.imagePreviewEnabled !== "boolean") {
+  const payload = await request.json().catch(() => ({})) as { revision?: unknown; analysisProvider?: unknown; imagePreviewEnabled?: unknown; consultationProvider?: unknown; consultationEnabled?: unknown };
+  if (!Number.isInteger(payload.revision) || !isAnalysisProvider(payload.analysisProvider) || typeof payload.imagePreviewEnabled !== "boolean"
+    || !isConsultationProvider(payload.consultationProvider) || typeof payload.consultationEnabled !== "boolean") {
     return Response.json({ error: "invalid_config" }, { status: 400 });
   }
   try {
@@ -20,6 +21,8 @@ export async function PUT(request: Request) {
       revision: payload.revision as number,
       analysisProvider: payload.analysisProvider,
       imagePreviewEnabled: payload.imagePreviewEnabled,
+      consultationProvider: payload.consultationProvider,
+      consultationEnabled: payload.consultationEnabled,
       ipFingerprint: admin.ipFingerprint,
     });
     return Response.json({ config });
