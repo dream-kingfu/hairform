@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "developmentRoles": {
+    "productDecision": "gpt-controller",
+    "architecture": "gpt-controller",
+    "taskSpecification": "gpt-controller",
+    "businessCodeImplementation": "deepseek-developer",
+    "deterministicVerification": "tooling",
+    "multimodalReview": "gpt-multimodal-reviewer",
+    "finalAcceptance": "gpt-release-reviewer"
+  },
+  "runtimeCapabilities": {
+    "visualAnalysis": "server-policy",
+    "consultation": "server-policy",
+    "imageGeneration": "server-policy",
+    "imageQualityReview": "server-policy"
+  },
+  "rules": [
+    "Development roles never override lib/server/model-policy.ts.",
+    "A task must name its implementation owner before business code changes.",
+    "DeepSeek may modify only task.allowed_paths.",
+    "GPT performs final acceptance against source evidence and deterministic checks.",
+    "Public files must not contain private operational context or secret values."
+  ]
+}

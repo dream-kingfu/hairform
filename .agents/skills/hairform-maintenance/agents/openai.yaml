@@ -1,0 +1,4 @@
+interface:
+  display_name: "HAIRFORM 维护"
+  short_description: "维护 HAIRFORM 网页、服务端、数据与交付流程"
+  default_prompt: "Use $hairform-maintenance to safely inspect and complete this HAIRFORM maintenance task."

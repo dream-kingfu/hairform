@@ -4,6 +4,23 @@ HAIRFORM 的重要功能、线上修复、模型策略和运行配置变更都�
 
 ## [Unreleased]
 
+### Added
+
+- 新增仓库级 `AGENTS.md`，明确 GPT 主控、DeepSeek 开发、确定性工具和 GPT 最终验收的职责、代码权限与最多两轮返修规则。
+- 新增 `.agents/skills/` 下的维护、DeepSeek 开发、多模态验收和发布验收 Skill，以及 `.ai-company/` 的公共架构、模型/角色路由、任务单、开发报告和验收报告模板。
+- 新增 GitHub PR 模板与质量门禁，在 PR 和 `main` 推送时使用 Node.js 22 执行锁定依赖安装、差异检查、Lint、生产构建和自动化测试。
+- 扩展 `.gitignore`，隔离主控电脑专属的 `AGENTS.private.md`、`.agents-private/`、`.ai-company/private/` 与 `scripts-private/`。
+
+### Scope
+
+- 本次只增加公共 AI 开发管理和 GitHub 交付层；不修改 H5、服务端 API、数据库、运行时模型、功能开关、Sites 生产部署或微信小程序，产品版本保持 `0.6.3`。
+
+### Verified
+
+- 主控电脑维护 Skill 与仓库内 4 个项目 Skill 均通过官方结构校验；新增 JSON、GitHub Actions YAML 和 Skill 界面元数据通过解析校验。
+- 公共协作文件未发现本机绝对路径、主控电脑标识、托管项目标识、私钥或常见明文令牌模式；本机私有上下文和两份未跟踪竞品资料未纳入变更。
+- Lint、生产构建与 48 项 H5/后端自动化测试通过；未使用真人照片、未调用真实模型、未修改生产配置，也未执行 Sites 部署。
+
 ## [0.6.3] - 2026-08-02
 
 ### Changed

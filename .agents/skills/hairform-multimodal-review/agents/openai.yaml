@@ -1,0 +1,4 @@
+interface:
+  display_name: "HAIRFORM 图片验收"
+  short_description: "对比授权肖像与发型预览，验收身份保持、目标变化和视觉瑕疵"
+  default_prompt: "Use $hairform-multimodal-review to compare the authorized input and generated HAIRFORM images."

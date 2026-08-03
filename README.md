@@ -38,6 +38,19 @@ DEMO_MODE=false
 
 文字分析固定支持 Kie Terra、阿里云 Qwen3.6-Flash 和智谱 GLM-4.6V-Flash；沟通改建议独立支持 Kie Terra（GPT）与 Qwen；真人预览固定使用 Kie Image2，质检使用 Luna/Terra。任何白名单外模型都会失败关闭。API Key 只允许保存在本地未提交的环境文件或 Sites 加密环境变量中。
 
+## AI 开发协作
+
+仓库内置可公开复现的轻量协作层：
+
+- `AGENTS.md`：统一角色、代码权限、隐私和交付门禁。
+- `.agents/skills/`：HAIRFORM 维护、DeepSeek 开发、多模态验收和发布验收 Skill。
+- `.ai-company/`：公共架构、能力路由、任务单和结构化交接模板。
+- `.github/workflows/quality-gate.yml`：PR 的 Lint、生产构建和自动化测试门禁。
+
+默认分工是 GPT 负责需求、架构、任务拆解和最终验收，DeepSeek 负责任务单授权范围内的业务代码，确定性工具负责客观检查。这里的 DeepSeek 是开发角色，不会改变 HAIRFORM 线上运行时的模型白名单。
+
+主控电脑专属运维信息继续保存在被 Git 忽略的 `AGENTS.private.md`、`PROJECT_CONTEXT_PRIVATE.md`、`.agents-private/` 或 `.ai-company/private/` 中，不得复制到公开任务、提交和 PR。
+
 ## 数据边界
 
 - D1 保存任务状态和结构化分析，R2 保存原图、可选头发蒙版、预览和报告。

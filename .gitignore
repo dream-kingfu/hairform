@@ -46,3 +46,7 @@ next-env.d.ts
 
 # private project handoff and operational context
 /PROJECT_CONTEXT_PRIVATE.md
+/AGENTS.private.md
+/.agents-private/
+/.ai-company/private/
+/scripts-private/
